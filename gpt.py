@@ -1,8 +1,9 @@
+from dataclasses import asdict
+
 import torch
 import torch.nn.functional as F
-
+import torch.nn as nn
 from pydantic.dataclasses import dataclass
-from torch import nn
 
 
 @dataclass
@@ -10,12 +11,16 @@ class GPTConfig:
     n_layers: int    # L
     n_heads: int     # H
     d_embd: int      # E
-    arch_name: str = 'gpt'
     max_seq_len: int = 1024
     vocab_size: int  = 50304 # V
+    arch_name: str = 'gpt'
+
+    def estimate_flops_per_token(self, n_layers, n_heads, d_embd, max_seq_len, vocab_size, **kwargs):
+        return 2 * 125e6 + 4 * n_layers * d_embd * max_seq_len
 
     def __post_init__(self):
         assert self.d_embd % self.n_heads == 0, 'd_embd must be a multiple of n_heads.'
+        self.flops_per_token = self.estimate_flops_per_token(**asdict(self))
 
 
 class CausalSelfAttention(nn.Module):
