@@ -15,12 +15,41 @@ class GPTConfig:
     vocab_size: int  = 50304 # V
     arch_name: str = 'gpt'
 
-    def estimate_flops_per_token(self, n_layers, n_heads, d_embd, max_seq_len, vocab_size, **kwargs):
-        return 2 * 125e6 + 4 * n_layers * d_embd * max_seq_len
+    @staticmethod
+    def estimate_flops_per_token(n_layers, n_heads, d_embd, max_seq_len, vocab_size, **kwargs):
+        ''' FLOPs per token derivation:
+        We first derive FLOPs per sequence:
+
+        qkvo_proj_flops = 4 * (2 * d_embd * d_embd * seq_len) = 8 * d_embd^2 * seq_len
+        sdpa_flops = n_heads * ((2 * seq_len * d_head * seq_len) + (2 * seq_len * seq_len * d_head)) = 4 * d_embd * seq_len^2
+        ffn_flops = (2 * (4 * d_embd) * d_embd * seq_len) + (2 * d_embd * (4 * d_embd) * seq_len) = 16 * d_embd^2 * seq_len
+        in_embd_flops = 2 * d_embd * vocab_size * seq_len = 2 * vocab_size * d_embd * seq_len
+        out_embd_flops = 2 * vocab_size * d_embd * seq_len = 2 * vocab_size * d_embd * seq_len
+
+        flops_per_seq = in_embd_flops + n_layers * (qkvo_flops + sdpa_flops + ffn_flops) + out_embd_flops
+        = n_layers * (24 * d_embd^2 * seq_len + 4 * d_embd * seq_len^2) + 4 * vocab_size * d_embd * seq_len
+        = (n_layers * (24 * d_embd^2 + 4 * d_embd * seq_len) + 4 * vocab_size * d_embd) * seq_len
+        = (24 * n_layers * d_embd^2 + 4 * d_embd * (n_layers * seq_len + vocab_size)) * seq_len
+
+        Thus, on average,
+        flops_per_token = 24 * n_layers * d_embd^2 + 4 * d_embd * (n_layers * seq_len + vocab_size)
+        '''
+        mm_flops = lambda M, K, N: 2 * M * K * N
+        d_head = d_embd // n_heads
+
+        qkvo_flops = 4 * mm_flops(d_embd, d_embd, max_seq_len)
+        sdpa_flops = n_heads * (mm_flops(max_seq_len, d_head, max_seq_len) + mm_flops(max_seq_len, max_seq_len, d_head))
+        ffn_flops = mm_flops(4*d_embd, d_embd, max_seq_len) + mm_flops(d_embd, 4*d_embd, max_seq_len)
+        in_embd_flops = mm_flops(d_embd, vocab_size, max_seq_len)
+        out_embd_flops = mm_flops(vocab_size, d_embd, max_seq_len)
+
+        flops_per_seq = in_embd_flops + n_layers * (qkvo_flops + sdpa_flops + ffn_flops) + out_embd_flops
+        flops_per_token = flops_per_seq // max_seq_len
+
+        return flops_per_token
 
     def __post_init__(self):
         assert self.d_embd % self.n_heads == 0, 'd_embd must be a multiple of n_heads.'
-        self.flops_per_token = self.estimate_flops_per_token(**asdict(self))
 
 
 class CausalSelfAttention(nn.Module):

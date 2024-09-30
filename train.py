@@ -52,8 +52,10 @@ def train(
 
     scaler = torch.amp.GradScaler()
 
+    flops_per_token = cfg_m.estimate_flops_per_token(**asdict(cfg_m))
+    flops_per_iter = 3 * flops_per_token * (bsz * cfg_m.max_seq_len)
+
     model.train()
-    flops_per_iter = 3 * cfg_m.flops_per_token * (bsz * cfg_m.max_seq_len)
     pbar = tqdm(total=n_steps)
 
     for step_idx, data_batch in zip(range(n_steps), data_loader):

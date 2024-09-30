@@ -23,47 +23,42 @@ class LLaMAConfig:
     d_hid: int = Optional[int] # K
     arch_name: str = 'llama_3.1'
 
-    def estimate_flops_per_token(self, n_layers, n_heads, n_kv_heads, d_embd, d_hid, max_seq_len, vocab_size, **kwargs):
-        ''' flops_per_token derivation:
-        flops_per_token ~= in_embd_flops + n_layers * (attn_flops + ffn_flops) + out_embd_flops
-            in_embd_flops = 2 * d_model * vocab_size
+    @staticmethod
+    def estimate_flops_per_token(n_layers, n_heads, n_kv_heads, d_embd, d_hid, max_seq_len, vocab_size, **kwargs):
+        ''' FLOPs per token derivation:
+        We first derive FLOPs per sequence:
 
-            attn_flops = qkvo_proj_flops + sdpa_flops
-                qkvo_proj_flops = (2 * n_heads + 2 * n_kv_heads) * (2 * d_head * d_model * 1)
-                = 4 * (n_heads + n_kv_heads) * d_head * d_model
-                = 4 * (n_heads + n_heads / gq_ratio) * d_head * d_model  (gq_ratio = 4 for LLaMAs)
-                = 4 * (1 + 1 / gq_ratio) * n_heads * d_head * d_model
-                = (4 + 4/gq_ratio) * d_model^2
+        qo_proj_flops = 2 * n_heads * (2 * d_head * d_embd * seq_len) = 4 * d_embd^2 * seq_len
+        kv_proj_flops = 2 * n_kv_heads * (2 * d_head * d_embd * seq_len) = 4 / gq_size * d_embd^2 * seq_len
+        sdpa_flops = n_heads * ((2 * seq_len * d_head * seq_len) + (2 * seq_len * seq_len * d_head)) = 4 * d_embd * seq_len^2
+        ffn_flops = 2 * (2 * d_hid * d_embd * seq_len) + d_hid * seq_len + (2 * d_embd * d_hid * seq_len)
+                   = (6 * d_embd + 1) * d_hid * seq_len
+        in_embd_flops = 2 * d_embd * vocab_size * seq_len
+        out_embd_flops = 2 * vocab_size * d_embd * seq_len
 
-                sdpa_flops = n_heads * (2 * 1 * d_head * seq_len + 2 * 1 * seq_len * d_head)
-                = n_heads * (4 * seq_len * d_head)
-                = 4 * d_model * seq_len
-            = (4 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len
+        flops_per_seq = in_embd_flops + n_layers * (qo_proj_flops + kv_proj_flops + sdpa_flops + ffn_flops) + out_embd_flops
+        = n_layers * (
+            (4 + 4/gq_size) * d_embd^2 * seq_len + 4 * d_embd * seq_len^2 + (6 * d_embd + 1) * d_hid * seq_len
+          ) + 4 * vocab_size * d_embd * seq_len
+        = n_layers * (((4 + 4/gq_size) * d_embd + 4 * seq_len + 6 * d_hid) * d_embd * seq_len + d_hid * seq_len) + \
+            4 * vocab_size * d_embd * seq_len
 
-            ffn_flops = 2 * (2 * d_hid * d_model * 1) + d_model * d_model + 2 * d_model * d_hid * 1
-            = 4 * d_hid * d_model + d_model^2 + 2 * d_hid * d_model
-            = 6 * d_hid * d_model + d_model^2  (d_hid ~= 8/3 * d_model)
-            = 16 * d_model^2 + d_model^2
-            = 17 * d_model^2
-
-            out_embd_flops = 2 * vocab_size * d_model * 1 = 2 * vocab_size * d_model
-
-        = n_layers * ((4 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len + 17 * d_model^2) + 2 * vocab_size * d_model
-        = n_layers * ((21 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len) + 2 * vocab_size * d_model
-        = (21 + 4/gq_ratio) * n_layers * d_model^2 + (4 * n_layers * seq_len + 2 * vocab_size) * d_model
+        Thus, on average,
+        flops_per_token = n_layers * d_embd * ((4+4/gq_size) * d_embd + 4 * seq_len + 6 * d_hid) + \
+            n_layers * d_hid + 4 * vocab_size * d_embd
         '''
         mm_flops = lambda M, K, N: 2 * M * K * N
-
-        in_embd_flops = mm_flops(d_embd, vocab_size, 1)
-        ffn_flops = 2 * mm_flops(d_hid, d_embd, 1) + d_embd**2 + mm_flops(d_embd, d_hid, 1)
-        out_embd_flops = mm_flops(vocab_size, d_embd, 1)
-
         d_head = d_embd // n_heads
-        qkvo_flops = (2 * n_heads + 2 * n_kv_heads) * mm_flops(d_head, d_embd, 1)
-        sdpa_flops = n_heads * (mm_flops(1, d_head, max_seq_len) + mm_flops(1, max_seq_len, d_head))
-        attn_flops = qkvo_flops + sdpa_flops
 
-        flops_per_token = in_embd_flops + n_layers * (attn_flops + ffn_flops) + out_embd_flops
+        qo_proj_flops = 2 * n_heads * mm_flops(d_head, d_embd, max_seq_len)
+        kv_proj_flops = 2 * n_kv_heads * mm_flops(d_head, d_embd, max_seq_len)
+        sdpa_flops = n_heads * (mm_flops(max_seq_len, d_head, max_seq_len) + mm_flops(max_seq_len, max_seq_len, d_head))
+        ffn_flops = 2 * mm_flops(d_hid, d_embd, max_seq_len) + d_hid * max_seq_len + mm_flops(d_embd, d_hid, max_seq_len)
+        in_embd_flops = mm_flops(d_embd, vocab_size, max_seq_len)
+        out_embd_flops = mm_flops(vocab_size, d_embd, max_seq_len)
+
+        flops_per_seq = in_embd_flops + n_layers * (qo_proj_flops + kv_proj_flops + sdpa_flops + ffn_flops) + out_embd_flops
+        flops_per_token = flops_per_seq // max_seq_len
 
         return flops_per_token
 
@@ -77,8 +72,6 @@ class LLaMAConfig:
         d_hid = int((4 * self.d_embd) * 2 / 3)
         d_hid = int(d_hid * self.ffn_mult)
         self.d_hid = self.ffn_factor * ((d_hid + self.ffn_factor - 1) // self.ffn_factor)
-
-        self.flops_per_token = self.estimate_flops_per_token(**asdict(self))
 
 
 class GroupedQueryAttention(nn.Module):
@@ -279,7 +272,7 @@ if __name__ == '__main__':
         rope_base=5e5,
         norm_eps=1e-5
     )
-    with open('configs/llama-3.1-70b_proxy.json', 'w') as f:
+    with open('configs/llama-3.1-70b-proxy.json', 'w') as f:
         json.dump(RootModel[LLaMAConfig](ll31_70b_proxy).model_dump(), f, indent=2)
 
     ll2_7b = LLaMAConfig(
