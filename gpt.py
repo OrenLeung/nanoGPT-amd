@@ -105,22 +105,44 @@ if __name__ == '__main__':
 
     gpt2_125m = GPTConfig(
         arch_name='gpt',
-        max_seq_len=1024,
-        vocab_size=50304,
         n_layers=12,
         n_heads=12,
         d_embd=768,
+        max_seq_len=1024,
+        vocab_size=50304,
     )
     with open('configs/gpt2-125m.json', 'w') as f:
         json.dump(RootModel[GPTConfig](gpt2_125m).model_dump(), f, indent=2)
 
-    gpt2_xl = GPTConfig(
+    gpt2_350m = GPTConfig(
         arch_name='gpt',
+        n_layers=24,
+        n_heads=16,
+        d_embd=1024,
         max_seq_len=1024,
         vocab_size=50304,
-        n_layers=48,
-        n_heads=45,
-        d_embd=1600,
     )
-    with open('configs/gpt2-xl.json', 'w') as f:
+    with open('configs/gpt2-350m.json', 'w') as f:
+        json.dump(RootModel[GPTConfig](gpt2_125m).model_dump(), f, indent=2)
+
+    gpt2_774m = GPTConfig(
+        arch_name='gpt',
+        n_layers=36,
+        n_heads=20,
+        d_embd=1280,
+        max_seq_len=1024,
+        vocab_size=50304,
+    )
+    with open('configs/gpt2-774m.json', 'w') as f:
+        json.dump(RootModel[GPTConfig](gpt2_125m).model_dump(), f, indent=2)
+
+    gpt2_xl = GPTConfig(
+        arch_name='gpt',
+        n_layers=48,
+        n_heads=25,
+        d_embd=1600,
+        max_seq_len=1024,
+        vocab_size=50304,
+    )
+    with open('configs/gpt2-1.5b.json', 'w') as f:
         json.dump(RootModel[GPTConfig](gpt2_xl).model_dump(), f, indent=2)
