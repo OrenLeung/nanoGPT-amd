@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from typing import Optional
 
 import torch
@@ -22,6 +23,24 @@ class LLaMAConfig:
     d_hid: int = Optional[int] # K
     arch_name: str = 'llama_3.1'
 
+    def estimate_flops_per_token(self, n_layers, n_heads, n_kv_heads, d_embd, d_hid, max_seq_len, vocab_size, **kwargs):
+        mm_flops = lambda M, K, N: 2 * M * K * N
+
+        in_embd_flops = mm_flops(d_embd, vocab_size, 1)
+        ffn_flops = 2 * mm_flops(d_hid, d_embd, 1) + d_embd**2 + mm_flops(d_embd, d_hid, 1)
+        out_embd_flops = mm_flops(vocab_size, d_embd, 1)
+
+        # attn_flops
+        d_head = d_embd // n_heads
+        qkvo_flops = (2 * n_heads + 2 * n_kv_heads) * mm_flops(d_head, d_embd, 1)
+        sdpa_flops = n_heads * (mm_flops(1, d_head, max_seq_len) + mm_flops(1, max_seq_len, d_head))
+        attn_flops = qkvo_flops + sdpa_flops
+
+        flops_per_token = in_embd_flops + n_layers * (attn_flops + ffn_flops) + out_embd_flops
+
+        return flops_per_token
+
+
     def __post_init__(self):
         assert self.d_embd % self.n_heads == 0, 'd_embd must be a multiple of n_heads.'
         assert self.d_embd % self.n_kv_heads == 0, 'd_embd must be a multiple of n_kv_heads.'
@@ -31,6 +50,8 @@ class LLaMAConfig:
         d_hid = int((4 * self.d_embd) * 2 / 3)
         d_hid = int(d_hid * self.ffn_mult)
         self.d_hid = self.ffn_factor * ((d_hid + self.ffn_factor - 1) // self.ffn_factor)
+
+        self.flops_per_token = self.estimate_flops_per_token(**asdict(self))
 
 
 class GroupedQueryAttention(nn.Module):
@@ -233,3 +254,35 @@ if __name__ == '__main__':
     )
     with open('configs/llama-3.1-70b_proxy.json', 'w') as f:
         json.dump(RootModel[LLaMAConfig](ll31_70b_proxy).model_dump(), f, indent=2)
+
+    ll2_7b = LLaMAConfig(
+        n_layers=32,
+        n_heads=32,
+        n_kv_heads=32,
+        d_embd=4096,
+        max_seq_len=4096,
+        vocab_size=3200,
+        ffn_mult=1.0,
+        ffn_factor=256,
+        rope_base=1e5,
+        norm_eps=1e-5,
+        arch_name='llama2'
+    )
+    with open('configs/llama-2-7b.json', 'w') as f:
+        json.dump(RootModel[LLaMAConfig](ll2_7b).model_dump(), f, indent=2)
+
+    ll2_7b_proxy = LLaMAConfig(
+        n_layers=1,
+        n_heads=32,
+        n_kv_heads=32,
+        d_embd=4096,
+        max_seq_len=4096,
+        vocab_size=3200,
+        ffn_mult=1.0,
+        ffn_factor=256,
+        rope_base=1e5,
+        norm_eps=1e-5,
+        arch_name='llama2'
+    )
+    with open('configs/llama-2-7b-proxy.json', 'w') as f:
+        json.dump(RootModel[LLaMAConfig](ll2_7b_proxy).model_dump(), f, indent=2)

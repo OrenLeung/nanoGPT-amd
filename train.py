@@ -50,9 +50,14 @@ def train(
     scaler = torch.amp.GradScaler()
 
     model.train()
+    flops_per_iter = 3 * cfg_m.flops_per_token * (bsz * cfg_m.max_seq_len)
     pbar = tqdm(total=n_steps)
 
     for step_idx, data_batch in zip(range(n_steps), data_loader):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+
         input_BT, label_BT = map(lambda t: t.pin_memory().to('cuda', non_blocking=True), data_batch)
 
         with torch.amp.autocast('cuda', torch.float16):
@@ -79,7 +84,14 @@ def train(
             }
             torch.save(ckpt, output_dir / 'ckpt.pt')
 
-        pbar.set_description(f'{step_idx=} / {loss=:.4f}')
+        end.record()
+        torch.cuda.synchronize()
+
+        t = start.elapsed_time(end) / 1e3
+        flops_per_sec = flops_per_iter / t
+        mfu = flops_per_sec / 989.5e12
+
+        pbar.set_description(f'{(flops_per_sec/1e12):.2f}TFLOP/s MFU={mfu:.2%}')
         pbar.update()
 
     pbar.close()
