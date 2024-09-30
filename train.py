@@ -20,6 +20,7 @@ def train(
     n_steps: int = 64,
     grad_acc_steps: int = 4,
     ckpt_freq: int = 16,
+    pt_compile: bool = False,
     output_dir: str = 'outputs/'
 ):
     torch.manual_seed(3985)
@@ -38,6 +39,8 @@ def train(
         raise ValueError(f'Model architecture {cfg_json["arch_name"]} not supported.')
     cfg_m = cfg_cls(**cfg_json)
     model = model_cls(**asdict(cfg_m)).to('cuda')
+    if pt_compile:
+        model = torch.compile(model)
 
     data_loader = DataLoader(
         SimulatedDataset(cfg_m.vocab_size, cfg_m.max_seq_len),
