@@ -5,6 +5,12 @@ Repo for benchmarking LLM training workloads.
 
 ## Usage
 
+Start the container:
+```bash
+./docker/launch.sh
+```
+
+Flags for `train.py`:
 ```bash
 NAME
 	train.py
