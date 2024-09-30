@@ -24,7 +24,7 @@ class LLaMAConfig:
     arch_name: str = 'llama_3.1'
 
     def estimate_flops_per_token(self, n_layers, n_heads, n_kv_heads, d_embd, d_hid, max_seq_len, vocab_size, **kwargs):
-		''' flops_per_token derivation:
+        ''' flops_per_token derivation:
         flops_per_token ~= in_embd_flops + n_layers * (attn_flops + ffn_flops) + out_embd_flops
             in_embd_flops = 2 * d_model * vocab_size
 
@@ -51,7 +51,7 @@ class LLaMAConfig:
         = n_layers * ((4 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len + 17 * d_model^2) + 2 * vocab_size * d_model
         = n_layers * ((21 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len) + 2 * vocab_size * d_model
         = (21 + 4/gq_ratio) * n_layers * d_model^2 + (4 * n_layers * seq_len + 2 * vocab_size) * d_model
-		'''
+        '''
         mm_flops = lambda M, K, N: 2 * M * K * N
 
         in_embd_flops = mm_flops(d_embd, vocab_size, 1)
