@@ -24,13 +24,40 @@ class LLaMAConfig:
     arch_name: str = 'llama_3.1'
 
     def estimate_flops_per_token(self, n_layers, n_heads, n_kv_heads, d_embd, d_hid, max_seq_len, vocab_size, **kwargs):
+		''' flops_per_token derivation:
+        flops_per_token ~= in_embd_flops + n_layers * (attn_flops + ffn_flops) + out_embd_flops
+            in_embd_flops = 2 * d_model * vocab_size
+
+            attn_flops = qkvo_proj_flops + sdpa_flops
+                qkvo_proj_flops = (2 * n_heads + 2 * n_kv_heads) * (2 * d_head * d_model * 1)
+                = 4 * (n_heads + n_kv_heads) * d_head * d_model
+                = 4 * (n_heads + n_heads / gq_ratio) * d_head * d_model  (gq_ratio = 4 for LLaMAs)
+                = 4 * (1 + 1 / gq_ratio) * n_heads * d_head * d_model
+                = (4 + 4/gq_ratio) * d_model^2
+
+                sdpa_flops = n_heads * (2 * 1 * d_head * seq_len + 2 * 1 * seq_len * d_head)
+                = n_heads * (4 * seq_len * d_head)
+                = 4 * d_model * seq_len
+            = (4 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len
+
+            ffn_flops = 2 * (2 * d_hid * d_model * 1) + d_model * d_model + 2 * d_model * d_hid * 1
+            = 4 * d_hid * d_model + d_model^2 + 2 * d_hid * d_model
+            = 6 * d_hid * d_model + d_model^2  (d_hid ~= 8/3 * d_model)
+            = 16 * d_model^2 + d_model^2
+            = 17 * d_model^2
+
+            out_embd_flops = 2 * vocab_size * d_model * 1 = 2 * vocab_size * d_model
+
+        = n_layers * ((4 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len + 17 * d_model^2) + 2 * vocab_size * d_model
+        = n_layers * ((21 + 4/gq_ratio) * d_model^2 + 4 * d_model * seq_len) + 2 * vocab_size * d_model
+        = (21 + 4/gq_ratio) * n_layers * d_model^2 + (4 * n_layers * seq_len + 2 * vocab_size) * d_model
+		'''
         mm_flops = lambda M, K, N: 2 * M * K * N
 
         in_embd_flops = mm_flops(d_embd, vocab_size, 1)
         ffn_flops = 2 * mm_flops(d_hid, d_embd, 1) + d_embd**2 + mm_flops(d_embd, d_hid, 1)
         out_embd_flops = mm_flops(vocab_size, d_embd, 1)
 
-        # attn_flops
         d_head = d_embd // n_heads
         qkvo_flops = (2 * n_heads + 2 * n_kv_heads) * mm_flops(d_head, d_embd, 1)
         sdpa_flops = n_heads * (mm_flops(1, d_head, max_seq_len) + mm_flops(1, max_seq_len, d_head))
