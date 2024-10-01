@@ -30,7 +30,6 @@ def train(
 
     with open(cfg_path) as f:
         cfg_json = json.load(f)
-
     if cfg_json['arch_name'] == 'gpt':
         cfg_cls, model_cls = GPTConfig, GPT
     elif cfg_json['arch_name'].startswith('llama'):
@@ -39,6 +38,7 @@ def train(
         raise ValueError(f'Model architecture {cfg_json["arch_name"]} not supported.')
     cfg_m = cfg_cls(**cfg_json)
     model = model_cls(**asdict(cfg_m)).to('cuda')
+
     if pt_compile:
         model = torch.compile(model)
 
@@ -46,10 +46,8 @@ def train(
         SimulatedDataset(cfg_m.vocab_size, cfg_m.max_seq_len),
         batch_size=bsz, num_workers=n_workers
     )
-
     optimizer = torch.optim.AdamW(model.parameters())
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda t: 1.0)
-
     scaler = torch.amp.GradScaler()
 
     flops_per_token = cfg_m.estimate_flops_per_token(**asdict(cfg_m))
@@ -74,11 +72,9 @@ def train(
         if (step_idx + 1) % grad_acc_steps == 0 or step_idx == n_steps - 1:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-
             optimizer.zero_grad(set_to_none=True)
 
         if (step_idx + 1) % ckpt_freq == 0 or step_idx == n_steps - 1:
