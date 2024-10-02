@@ -153,7 +153,7 @@ class RMSNorm(nn.Module):
         self.eps = ref.eps
 
 
-class TransformerBlock(nn.Module):
+class LLaMABlock(nn.Module):
     def __init__(self, d_embd, **kwargs):
         super().__init__()
         self.attn_norm = RMSNorm(d_embd, **kwargs)
@@ -177,7 +177,7 @@ class LLaMA(nn.Module):
     def __init__(self, vocab_size, d_embd, n_layers, n_heads, **kwargs):
         super().__init__()
         self.tok_embd = nn.Embedding(vocab_size, d_embd)
-        self.tsfmr_blks = nn.ModuleList(TransformerBlock(d_embd, n_heads=n_heads, **kwargs) for _ in range(n_layers))
+        self.tsfmr_blks = nn.ModuleList(LLaMABlock(d_embd, n_heads=n_heads, **kwargs) for _ in range(n_layers))
         self.norm = RMSNorm(d_embd, **kwargs)
         self.lm_head = nn.Linear(d_embd, vocab_size, bias=False)
         self.register_buffer('freq_cis_TFC', precompute_freq_cis(d_embd//n_heads, **kwargs).to(self.lm_head.weight.dtype))

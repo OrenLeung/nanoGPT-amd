@@ -73,7 +73,7 @@ class CausalSelfAttention(nn.Module):
         self.out_proj.load_state_dict(ref.c_proj.state_dict())
 
 
-class TransformerBlock(nn.Module):
+class GPTBlock(nn.Module):
     def __init__(self, d_embd, **kwargs):
         super().__init__()
         self.attn_norm = nn.LayerNorm(d_embd)
@@ -103,7 +103,7 @@ class GPT(nn.Module):
         super().__init__()
         self.tok_embd = nn.Embedding(vocab_size, d_embd)
         self.pos_embd = nn.Embedding(max_seq_len, d_embd)
-        self.tsfmr_blks = nn.ModuleList(TransformerBlock(d_embd, **kwargs) for _ in range(n_layers))
+        self.tsfmr_blks = nn.ModuleList(GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
         self.out_norm = nn.LayerNorm(d_embd)
 
     def forward(self, idx_BT):

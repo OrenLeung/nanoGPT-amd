@@ -265,7 +265,7 @@ def test_rms_norm():
     assert torch.allclose(y_BTE, y_BTE_ref)
 
 
-def test_transformer_block():
+def test_llama_block():
     tsfmr_blk_ref = RefTransformerBlock(cfg).to('cuda')
     freq_cis_ref = ref_precompute_freqs_cis(
         cfg.block_size,
@@ -275,7 +275,7 @@ def test_transformer_block():
     ).to('cuda')
     mask = torch.tril(torch.ones(cfg.block_size, cfg.block_size, dtype=torch.bool, device='cuda'))
 
-    tsfmr_blk = TransformerBlock(
+    tsfmr_blk = LLaMABlock(
         cfg.dim,
         norm_eps=cfg.norm_eps,
         n_heads=cfg.n_head,

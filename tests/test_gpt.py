@@ -203,9 +203,9 @@ def test_ffn():
     assert torch.allclose(y_BTE, y_BTE_ref)
 
 
-def test_transformer_block():
+def test_gpt_block():
     block_ref = Block(cfg).to('cuda')
-    block = TransformerBlock(d_embd=cfg.n_embd, n_heads=cfg.n_head).to('cuda')
+    block = GPTBlock(d_embd=cfg.n_embd, n_heads=cfg.n_head).to('cuda')
     block.load_ref_weights(block_ref)
 
     x_BTE = torch.rand([2, 16, cfg.n_embd], device='cuda')

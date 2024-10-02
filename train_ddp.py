@@ -57,7 +57,7 @@ def train(
         case _:
             raise ValueError(f'Model architecture {cfg_json["arch_name"]} not supported.')
     cfg_m = cfg_cls(**cfg_json)
-    model = DDP(model_cls(**cfg_json).to(rank), device_ids=[rank])
+    model = DDP(model_cls(**cfg_json).to(rank))
     if pt_compile:
         model = torch.compile(model)
 
