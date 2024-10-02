@@ -10,5 +10,5 @@
   "rope_base": 100000.0,
   "norm_eps": 1e-05,
   "d_hid": 11008,
-  "arch_name": "llama2"
+  "arch_name": "llama"
 }
