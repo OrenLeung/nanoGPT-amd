@@ -21,7 +21,7 @@ class LLaMAConfig:
     rope_base: float
     norm_eps: float
     d_hid: int = Optional[int] # K
-    arch_name: str = 'llama_3.1'
+    arch_name: str = 'llama'
 
     @staticmethod
     def estimate_flops_per_token(n_layers, n_heads, n_kv_heads, d_embd, d_hid, max_seq_len, vocab_size, **kwargs):
@@ -286,7 +286,7 @@ if __name__ == '__main__':
         ffn_factor=256,
         rope_base=1e5,
         norm_eps=1e-5,
-        arch_name='llama2'
+        arch_name='llama'
     )
     with open('configs/llama-2-7b.json', 'w') as f:
         json.dump(RootModel[LLaMAConfig](ll2_7b).model_dump(), f, indent=2)
@@ -302,7 +302,7 @@ if __name__ == '__main__':
         ffn_factor=256,
         rope_base=1e5,
         norm_eps=1e-5,
-        arch_name='llama2'
+        arch_name='llama'
     )
     with open('configs/llama-2-7b-proxy.json', 'w') as f:
         json.dump(RootModel[LLaMAConfig](ll2_7b_proxy).model_dump(), f, indent=2)
