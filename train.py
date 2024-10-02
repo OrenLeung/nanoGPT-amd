@@ -43,7 +43,9 @@ def train(
         model = torch.compile(model)
 
     dataset = SimulatedDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)
-    data_loader = DataLoader( dataset, batch_size=bsz, num_workers=n_workers)
+    data_loader = DataLoader(
+        dataset, batch_size=bsz, num_workers=n_workers, pin_memory=True, shuffle=True,
+    )
     optimizer = torch.optim.AdamW(model.parameters())
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda t: 1.0)
     scaler = torch.amp.GradScaler()
@@ -55,7 +57,6 @@ def train(
         prof_ctx = torch.profiler.profile(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(wait=5, warmup=5, active=5, repeat=1),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir),
             with_flops=True
         )
     else:
@@ -106,6 +107,9 @@ def train(
             else:
                 prof.step()
             pbar.update()
+
+    if profile:
+        prof.export_chrome_trace(f'{output_dir}/{Path(cfg_path).stem}_trace.json')
 
 
 class SimulatedDataset(Dataset):
