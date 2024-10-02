@@ -100,7 +100,7 @@ FLAGS
         Default: False
     -o, --output_dir=OUTPUT_DIR
         Type: str
-        Default: 'outputs/ddp_single_node/'
+        Default: 'outputs/ddp/'
 
 NOTES
     You can also use flags syntax for POSITIONAL ARGUMENTS

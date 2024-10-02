@@ -28,7 +28,7 @@ def train_ddp(
     ckpt_freq: int = 64,
     pt_compile: bool = False,
     profile: bool = False,
-    output_dir: str = 'outputs/ddp_single_node/'
+    output_dir: str = 'outputs/ddp/'
 ):
     torch.manual_seed(3985)
     world_size = torch.cuda.device_count()
