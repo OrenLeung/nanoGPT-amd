@@ -1,4 +1,5 @@
 import json
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,7 +22,8 @@ def train(
     grad_acc_steps: int = 8,
     ckpt_freq: int = 64,
     pt_compile: bool = False,
-    output_dir: str = 'outputs/'
+    profile: bool = False,
+    output_dir: str = 'outputs/single_gpu'
 ):
     torch.manual_seed(3985)
     torch.cuda.set_device(gpu_id)
@@ -46,53 +48,64 @@ def train(
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda t: 1.0)
     scaler = torch.amp.GradScaler()
 
-    flops_per_token = cfg_m.estimate_flops_per_token(**cfg_json)
-    flops_per_iter = 3 * flops_per_token * (bsz * cfg_m.max_seq_len)
-
-    Path(output_dir).mkdir(exist_ok=True)
-    pbar = tqdm(total=n_steps)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     model.train()
 
-    for step_idx, data_batch in enumerate(data_loader):
-        start = torch.cuda.Event(enable_timing=True)
-        end = torch.cuda.Event(enable_timing=True)
-        start.record()
+    if profile:
+        prof_ctx = torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=5, warmup=5, active=5, repeat=1),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir),
+            with_flops=True
+        )
+    else:
+        prof_ctx = nullcontext()
+        flops_per_token = cfg_m.estimate_flops_per_token(**cfg_json)
+        flops_per_iter = 3 * flops_per_token * (bsz * cfg_m.max_seq_len)
 
-        input_BT, label_BT = map(lambda t: t.pin_memory().to(gpu_id), data_batch)
+    with prof_ctx as prof, tqdm(total=n_steps) as pbar:
+        for step_idx, data_batch in enumerate(data_loader):
+            if not profile:
+                start = torch.cuda.Event(enable_timing=True)
+                end = torch.cuda.Event(enable_timing=True)
+                start.record()
 
-        with torch.amp.autocast('cuda', torch.float16):
-            logits_BTV = model(input_BT)
-            loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
-            loss /= grad_acc_steps
-        scaler.scale(loss).backward()
+            input_BT, label_BT = map(lambda t: t.pin_memory().to(gpu_id), data_batch)
 
-        if (step_idx + 1) % grad_acc_steps == 0:  # Assume n_steps % grad_acc_steps == 0
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
+            with torch.amp.autocast('cuda', torch.float16):
+                logits_BTV = model(input_BT)
+                loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
+                loss /= grad_acc_steps
+            scaler.scale(loss).backward()
 
-        if (step_idx + 1) % ckpt_freq == 0:  # Assume n_steps % ckpt_freq == 0
-            ckpt = {
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(), 
-                'scaler': scaler.state_dict()
-            }
-            torch.save(ckpt, Path(output_dir) / 'ckpt.pt')
+            if (step_idx + 1) % grad_acc_steps == 0:  # Assume n_steps % grad_acc_steps == 0
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                scaler.step(optimizer)
+                scaler.update()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
 
-        end.record()
-        torch.cuda.synchronize()
+            if (step_idx + 1) % ckpt_freq == 0:  # Assume n_steps % ckpt_freq == 0
+                ckpt = {
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(), 
+                    'scaler': scaler.state_dict()
+                }
+                torch.save(ckpt, Path(output_dir) / 'ckpt.pt')
 
-        t = start.elapsed_time(end) / 1e3
-        flops_per_sec = flops_per_iter / t
-        mfu = flops_per_sec / 989.5e12
+            if not profile:
+                end.record()
+                torch.cuda.synchronize()
 
-        pbar.set_description(f'[GPU ID {gpu_id}]  {(flops_per_sec/1e12):.2f} TFLOP/s  MFU={mfu:.2%}')
-        pbar.update()
+                t = start.elapsed_time(end) / 1e3
+                flops_per_sec = flops_per_iter / t
+                mfu = flops_per_sec / 989.5e12
 
-    pbar.close()
+                pbar.set_description(f'[GPU ID {gpu_id}]  {(flops_per_sec/1e12):.2f} TFLOP/s  MFU={mfu:.2%}')
+            else:
+                prof.step()
+            pbar.update()
 
 
 class SimulatedDataset(Dataset):
