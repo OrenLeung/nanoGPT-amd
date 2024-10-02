@@ -18,8 +18,7 @@ To start the container:
 
 ## Single GPU Training
 
-Flags for `train.py`:
-```bash
+```
 NAME
     train.py
 
@@ -66,7 +65,7 @@ NOTES
 
 ## Multi-GPU Training with DDP
 
-```bash
+```
 NAME
     train_ddp.py
 
