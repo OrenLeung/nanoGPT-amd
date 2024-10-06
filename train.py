@@ -61,7 +61,6 @@ class GPT(nn.Module):
 
 
 def train(
-    gpu_id: int = 0,
     bsz: int = 8,
     n_workers: int = 8,
     n_steps: int = 128,
@@ -91,7 +90,7 @@ def train(
     model.train()
 
     for step_idx, data_batch in enumerate(data_loader):
-        input_BT, label_BT = map(lambda t: t.pin_memory().to(gpu_id), data_batch)
+        input_BT, label_BT = map(lambda t: t.pin_memory().to("cuda:0"), data_batch)
 
         with torch.amp.autocast('cuda', torch.bfloat16):
             logits_BTV = model(input_BT)
