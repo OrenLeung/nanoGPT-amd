@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
 
 import torch
 import torch.nn.functional as F
@@ -81,16 +80,13 @@ def train(
     if pt_compile:
         model = torch.compile(model)
 
-    dataset = SimulatedDataset(cfg_json["vocab_size"], cfg_json["max_seq_len"], bsz*n_steps)
-    data_loader = DataLoader(
-        dataset, batch_size=bsz, num_workers=n_workers, pin_memory=True, shuffle=True,
-    )
     optimizer = torch.optim.AdamW(model.parameters(), fused=True)
 
     model.train()
 
-    for step_idx, data_batch in enumerate(data_loader):
-        input_BT, label_BT = map(lambda t: t.pin_memory().to("cuda:0"), data_batch)
+    for step_idx in range(100):
+        input_BT = torch.randint(50304, [8, 1024], dtype=torch.int64).to('cuda:0')
+        label_BT = torch.randint(50304, [8, 1024], dtype=torch.int64).to('cuda:0')
 
         with torch.amp.autocast('cuda', torch.bfloat16):
             logits_BTV = model(input_BT)
@@ -102,24 +98,6 @@ def train(
 
         torch.cuda.synchronize()
         print(f"finish {step_idx} step")
-
-
-
-class SimulatedDataset(Dataset):
-    def __init__(self, vocab_size, max_seq_len, ds_len):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.max_seq_len = max_seq_len
-        self.ds_len = ds_len
-
-    def __getitem__(self, idx):
-        input_T = torch.randint(self.vocab_size, [self.max_seq_len], dtype=torch.int64)
-        label_T = torch.cat([input_T[:-1], torch.randint(self.vocab_size, [1])])
-        return input_T, label_T
-
-    def __len__(self):
-        return self.ds_len
-
 
 if __name__ == "__main__":
     import fire
