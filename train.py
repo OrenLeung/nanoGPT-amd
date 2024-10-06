@@ -1,117 +1,109 @@
-import json
-from contextlib import nullcontext
-from dataclasses import asdict
-from pathlib import Path
+import torch
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+import torch.nn as nn
 
-from gpt import GPTConfig, GPT
-from llama import LLaMAConfig, LLaMA
+class CausalSelfAttention(nn.Module):
+    def __init__(self, d_embd, n_heads, **kwargs):
+        super().__init__()
+        self.d_head = d_embd // n_heads  # D
+        self.attn_proj = nn.Linear(d_embd, 3*d_embd)
+        self.out_proj = nn.Linear(d_embd, d_embd)
+ 
+    def forward(self, x_BTE):
+        qkv = self.attn_proj(x_BTE).split(x_BTE.size(-1), -1)
+        split_attn_head = lambda z: z.unflatten(-1, [-1, self.d_head]).transpose(1, 2)
+        q_BHTD, k_BHTD, v_BHTD = map(split_attn_head, qkv)
+        o_BHTD = F.scaled_dot_product_attention(q_BHTD, k_BHTD, v_BHTD, dropout_p=0.0, is_causal=True)
+        o_BTE = o_BHTD.transpose(1, 2).flatten(-2)
+        y_BTE = self.out_proj(o_BTE)
+        return y_BTE
+
+class GPTBlock(nn.Module):
+    def __init__(self, d_embd, **kwargs):
+        super().__init__()
+        self.attn_norm = nn.LayerNorm(d_embd)
+        self.attn = CausalSelfAttention(d_embd, **kwargs)
+        self.ffn_norm = nn.LayerNorm(d_embd)
+        self.ffn = nn.Sequential(
+            nn.Linear(d_embd, 4*d_embd),
+            nn.GELU(),
+            nn.Linear(4*d_embd, d_embd)
+        )
+
+    def forward(self, x_BTE):
+        x_BTE = x_BTE + self.attn(self.attn_norm(x_BTE))
+        y_BTE = x_BTE + self.ffn(self.ffn_norm(x_BTE))
+        return y_BTE
+
+class GPT(nn.Module):
+    def __init__(self, vocab_size, max_seq_len, n_layers, d_embd, **kwargs):
+        super().__init__()
+        self.tok_embd = nn.Embedding(vocab_size, d_embd)
+        self.pos_embd = nn.Embedding(max_seq_len, d_embd)
+        self.tsfmr_blks = nn.ModuleList(GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
+        self.out_norm = nn.LayerNorm(d_embd)
+
+    def forward(self, idx_BT):
+        pos_T = torch.arange(idx_BT.size(1), dtype=torch.int64, device=idx_BT.device)
+        x_BTE = self.tok_embd(idx_BT) + self.pos_embd(pos_T).unsqueeze(0)
+
+        for tsfmr_blk in self.tsfmr_blks:
+            x_BTE = tsfmr_blk(x_BTE)
+
+        x_BTE = self.out_norm(x_BTE)
+        logits_BTV = x_BTE @ self.tok_embd.weight.T  # Weight tying
+
+        return logits_BTV
 
 
 def train(
-    cfg_path: str,
     gpu_id: int = 0,
     bsz: int = 8,
     n_workers: int = 8,
     n_steps: int = 128,
-    grad_acc_steps: int = 8,
-    ckpt_freq: int = 64,
     pt_compile: bool = False,
-    profile: bool = False,
-    output_dir: str = 'outputs/single_gpu'
 ):
     torch.manual_seed(3985)
-    torch.cuda.set_device(gpu_id)
+    torch.cuda.set_device(0)
 
-    with open(cfg_path) as f:
-        cfg_json = json.load(f)
-    match cfg_json['arch_name']:
-        case 'gpt':
-            cfg_cls, model_cls = GPTConfig, GPT
-        case 'llama':
-            cfg_cls, model_cls = LLaMAConfig, LLaMA
-        case _:
-            raise ValueError(f'Unsupported model {cfg_json["arch_name"]}.')
-    cfg_m = cfg_cls(**cfg_json)
-    model = model_cls(**cfg_json).to(gpu_id)
+    cfg_json = {
+    "n_layers": 1,
+    "n_heads": 12,
+    "d_embd": 768,
+    "max_seq_len": 1024,
+    "vocab_size": 50304,
+    }
+
+    model = GPT(**cfg_json).to('cuda:0')
     if pt_compile:
         model = torch.compile(model)
 
-    dataset = SimulatedDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)
+    dataset = SimulatedDataset(cfg_json["vocab_size"], cfg_json["max_seq_len"], bsz*n_steps)
     data_loader = DataLoader(
         dataset, batch_size=bsz, num_workers=n_workers, pin_memory=True, shuffle=True,
     )
-    optimizer = torch.optim.AdamW(model.parameters())
-    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda t: 1.0)
+    optimizer = torch.optim.AdamW(model.parameters(), fused=True)
 
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
     model.train()
 
-    if profile:
-        prof_ctx = torch.profiler.profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=5, warmup=5, active=5, repeat=1),
-            with_flops=True
-        )
-    else:
-        prof_ctx = nullcontext()
-        flops_per_token = cfg_m.estimate_flops_per_token(**cfg_json)
-        flops_per_iter = 3 * flops_per_token * (bsz * cfg_m.max_seq_len)
-        if 'H100' in torch.cuda.get_device_name():
-            flops_promised = 989.5e12
-        elif 'MI300X' in torch.cuda.get_device_name():
-            flops_promised = 1300e12
-        else:
-            raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
+    for step_idx, data_batch in enumerate(data_loader):
+        input_BT, label_BT = map(lambda t: t.pin_memory().to(gpu_id), data_batch)
 
-    with prof_ctx as prof, tqdm(total=n_steps) as pbar:
-        for step_idx, data_batch in enumerate(data_loader):
-            if not profile:
-                start = torch.cuda.Event(enable_timing=True)
-                end = torch.cuda.Event(enable_timing=True)
-                start.record()
+        with torch.amp.autocast('cuda', torch.bfloat16):
+            logits_BTV = model(input_BT)
+            loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
+        loss.backward()
 
-            input_BT, label_BT = map(lambda t: t.pin_memory().to(gpu_id), data_batch)
+        optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
 
-            with torch.amp.autocast('cuda', torch.bfloat16):
-                logits_BTV = model(input_BT)
-                loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
-                loss /= grad_acc_steps
-            loss.backward()
+        torch.cuda.synchronize()
+        print(f"finish {step_idx} step")
 
-            if (step_idx + 1) % grad_acc_steps == 0:  # Assume n_steps % grad_acc_steps == 0
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
-
-            if (step_idx + 1) % ckpt_freq == 0:  # Assume n_steps % ckpt_freq == 0
-                ckpt = {
-                    'model': model.state_dict(),
-                    'optimizer': optimizer.state_dict(), 
-                }
-                torch.save(ckpt, Path(output_dir) / 'ckpt.pt')
-
-            if not profile:
-                end.record()
-                torch.cuda.synchronize()
-
-                t = start.elapsed_time(end) / 1e3
-                flops_per_sec = flops_per_iter / t
-                mfu = flops_per_sec / flops_promised
-
-                pbar.set_description(f'[GPU ID {gpu_id}]  {(flops_per_sec/1e12):.2f} TFLOP/s  MFU={mfu:.2%}')
-            else:
-                prof.step()
-            pbar.update()
-
-    if profile:
-        prof.export_chrome_trace(f'{output_dir}/{Path(cfg_path).stem}_trace.json')
 
 
 class SimulatedDataset(Dataset):
@@ -128,8 +120,8 @@ class SimulatedDataset(Dataset):
 
     def __len__(self):
         return self.ds_len
- 
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     import fire
     fire.Fire(train)
