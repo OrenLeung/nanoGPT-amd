@@ -76,6 +76,13 @@ def train(
         if not profile:
             flops_per_token = cfg_m.estimate_flops_per_token(**cfg_json)
             flops_per_iter = 3 * flops_per_token * (bsz * cfg_m.max_seq_len)
+            if 'H100' in torch.cuda.get_device_name():
+                flops_promised = 989.5e12
+            elif 'MI300X' in torch.cuda.get_device_name():
+                flops_promised = 1300e12
+            else:
+                raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
+
     pbar_ctx = tqdm(total=n_steps) if rank == 0 else nullcontext()
     model.train()
 
