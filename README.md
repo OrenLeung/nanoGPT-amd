@@ -2,6 +2,15 @@
 
 Repo for benchmarking LLM training workloads.
 
+## TODO: 
+- [x] reprod why torch compile doesnt work on amd pypi nightly even on gpt2 single gpu @orenleung
+- [ ] selection act checkpointing @kimbochen
+- [ ] removing torch.save 
+- [ ] benchmark fsdp + selection act ckpt 8B llama3 @kimbochen
+- [ ] add transformer engine fp8 for nvidia. similar to https://github.com/cchan/nanoGPT-fp8/commits/master/
+- [ ] multi-node nvidia
+- [ ] multi-node amd
+
 
 ## Installation
 
