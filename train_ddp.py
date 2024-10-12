@@ -57,7 +57,7 @@ def train(
     else:
         raise ValueError(f'Model architecture {cfg_json["arch_name"]} not supported.')
     cfg_m = cfg_cls(**cfg_json)
-    model = DDP(model_cls(**cfg_json).to(rank))
+    model = DDP(model_cls(**cfg_json).to(rank), gradient_as_bucket_view=True)
 
     if pt_compile:
         model = torch.compile(model)
@@ -74,8 +74,8 @@ def train(
     if rank == 0:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         if not profile:
-            flops_per_token = cfg_m.estimate_flops_per_token(**cfg_json)
-            flops_per_iter = 3 * flops_per_token * (bsz * cfg_m.max_seq_len)
+            flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
+            flops_per_iter = flops_per_token * (bsz * cfg_m.max_seq_len)
             if 'H100' in torch.cuda.get_device_name():
                 flops_promised = 989.5e12
             elif 'MI300X' in torch.cuda.get_device_name():
