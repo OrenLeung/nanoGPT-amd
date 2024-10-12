@@ -43,6 +43,7 @@ def train_fsdp(
     reduce_freq: int = 32,
     sac_freq: str = '1/1',
     pt_compile: bool = False,
+    compile_mode: str = 'default', # "default", "reduce-overhead", "max-autotune" or "max-autotune-no-cudagraphs"
     profile: bool = False,
     output_dir: str = 'outputs/fsdp/'
 ):
@@ -51,7 +52,7 @@ def train_fsdp(
     train_args = (
         world_size,
         cfg_path, bsz, n_workers, n_steps, grad_acc_steps, reduce_freq,
-        sac_freq, pt_compile, profile, output_dir
+        sac_freq, pt_compile, compile_mode, profile, output_dir
     )
     mp.spawn(train, train_args, nprocs=world_size)
 
@@ -59,7 +60,7 @@ def train_fsdp(
 def train(
     rank, world_size,
     cfg_path, bsz, n_workers, n_steps, grad_acc_steps, reduce_freq,
-    sac_freq, pt_compile, profile, output_dir
+    sac_freq, pt_compile, compile_mode, profile, output_dir
 ):
     # Construct process group
     os.environ.update({'MASTER_ADDR': 'localhost', 'MASTER_PORT': '30985'})
@@ -112,7 +113,9 @@ def train(
         apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=should_ckpt)
 
     if pt_compile:
-        model = torch.compile(model)
+        print("compiling")
+        print(compile_mode)
+        model = torch.compile(model, mode=compile_mode)
 
     # Configure training setup
     dataset = DummyDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)

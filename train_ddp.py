@@ -26,6 +26,7 @@ def train_ddp(
     n_steps: int = 128*8,
     grad_acc_steps: int = 8,
     pt_compile: bool = False,
+    compile_mode: str = 'default',
     profile: bool = False,
     output_dir: str = 'outputs/ddp/'
 ):
@@ -34,14 +35,14 @@ def train_ddp(
     
     train_args = (
         world_size, cfg_path, bsz, n_workers, n_steps, grad_acc_steps,
-        pt_compile, profile, output_dir
+        pt_compile, compile_mode, profile, output_dir
     )
     mp.spawn(train, train_args, nprocs=world_size)
 
 
 def train(
     rank, world_size,
-    cfg_path, bsz, n_workers, n_steps, grad_acc_steps, pt_compile, profile,
+    cfg_path, bsz, n_workers, n_steps, grad_acc_steps, pt_compile, compile_mode, profile,
     output_dir
 ):
     os.environ.update({'MASTER_ADDR': 'localhost', 'MASTER_PORT': '30985'})
@@ -60,7 +61,7 @@ def train(
     model = DDP(model_cls(**cfg_json).to(rank), gradient_as_bucket_view=True)
 
     if pt_compile:
-        model = torch.compile(model)
+        model = torch.compile(model, mode=compile_mode)
 
     dataset = DummyDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)
     data_loader = DataLoader(

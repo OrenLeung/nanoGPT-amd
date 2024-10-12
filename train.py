@@ -21,6 +21,7 @@ def train(
     n_steps: int = 128,
     grad_acc_steps: int = 8,
     pt_compile: bool = False,
+    compile_mode: str = 'default',
     profile: bool = False,
     output_dir: str = 'outputs/single_gpu'
 ):
@@ -41,7 +42,7 @@ def train(
 
     if pt_compile:
         print("compiling")
-        model = torch.compile(model)
+        model = torch.compile(model, mode=compile_mode)
 
     # Configure training setup
     dataset = DummyDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)
