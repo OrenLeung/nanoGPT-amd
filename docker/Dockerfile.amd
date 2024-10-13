@@ -3,7 +3,6 @@ FROM rocm/pytorch:rocm6.2_ubuntu22.04_py3.10_pytorch_release_2.3.0
 
 RUN apt install nano
 
-
 RUN pip install uv
 
 RUN uv pip install --system ipython pytest fire pydantic pybind11

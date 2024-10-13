@@ -1,82 +1,99 @@
 import contextlib
-import json
-from contextlib import nullcontext
-from dataclasses import asdict
-from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+import torch.nn as nn
 
-from gpt import GPTConfig, GPT
-from llama import LLaMAConfig, LLaMA
+from pydantic.dataclasses import dataclass
 
+@dataclass
+class GPTConfig:
+    n_layers: int    # L
+    n_heads: int     # H
+    d_embd: int      # E
+    max_seq_len: int = 1024
+    vocab_size: int  = 50304 # V
+    arch_name: str = 'gpt'
+
+    @staticmethod
+    def estimate_flops_per_token(model, config):
+        # get param count
+        N = sum(p.numel() for p in model.parameters())
+        
+        # print param count in B
+        print(f"Param count: {N/1e9}B")
+                 
+        head_dim = config['d_embd'] // config['n_heads'] 
+         
+        flops_per_token = 6 * N + 12 * config['n_layers'] * config['n_heads'] * head_dim * config['max_seq_len']
+        
+        return flops_per_token
+
+    def __post_init__(self):
+        assert self.d_embd % self.n_heads == 0, 'd_embd must be a multiple of n_heads.'
+
+class GPT(nn.Module):
+    def __init__(self, vocab_size, max_seq_len, n_layers, d_embd, **kwargs):
+        super().__init__()
+        self.tok_embd = nn.Embedding(vocab_size, d_embd)
+        self.pos_embd = nn.Embedding(max_seq_len, d_embd)
+        
+        
+        # self.tsfmr_blks = nn.ModuleList(GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
+        import transformer_engine.pytorch as te
+        self.tsfmr_blks = nn.ModuleList(te.TransformerLayer(
+                    d_embd,
+                    d_embd * 4,
+                    kwargs['n_heads'],
+                    layer_number=i+1,
+                    # Optional, for speedups
+                    fuse_qkv_params=True,
+                    attn_input_format='bshd'
+                ) 
+                for i in range(n_layers)                       
+                )
+        
+        self.out_norm = nn.LayerNorm(d_embd)
+
+    def forward(self, idx_BT):
+        pos_T = torch.arange(idx_BT.size(1), dtype=torch.int64, device=idx_BT.device)
+        x_BTE = self.tok_embd(idx_BT) + self.pos_embd(pos_T).unsqueeze(0)
+
+        for tsfmr_blk in self.tsfmr_blks:
+            x_BTE = tsfmr_blk(x_BTE)
+
+        x_BTE = self.out_norm(x_BTE)
+        logits_BTV = x_BTE @ self.tok_embd.weight.T  # Weight tying
+
+        return logits_BTV
 
 def train(
-    cfg_path: str,
     gpu_id: int = 0,
     bsz: int = 8,
-    n_workers: int = 8,
-    n_steps: int = 128,
     grad_acc_steps: int = 8,
-    pt_compile: bool = False,
-    compile_mode: str = 'default',
-    profile: bool = False,
-    output_dir: str = 'outputs/single_gpu'
 ):
     torch.manual_seed(3985)
     torch.cuda.set_device(gpu_id)
 
-    # Configure model
-    with open(cfg_path) as f:
-        cfg_json = json.load(f)
-    if cfg_json['arch_name'] == 'gpt':
-        cfg_cls, model_cls = GPTConfig, GPT
-    elif cfg_json['arch_name'] == 'llama':
-        cfg_cls, model_cls = LLaMAConfig, LLaMA
-    else:
-        raise ValueError(f'Model architecture {cfg_json["arch_name"]} not supported.')
-    cfg_m = cfg_cls(**cfg_json)
-    model = model_cls(**cfg_json).to(gpu_id)
+    cfg_json = {
+        "n_layers": 48,
+        "n_heads": 25,
+        "d_embd": 1600,
+        "max_seq_len": 1024,
+        "vocab_size": 50304,
+    }
 
-    if pt_compile:
-        print("compiling")
-        model = torch.compile(model, mode=compile_mode)
+    cfg_m = GPTConfig(**cfg_json)
+    model = GPT(**cfg_json).to(gpu_id)
 
-    # Configure training setup
-    dataset = DummyDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)
-    data_loader = DataLoader(
-        dataset, batch_size=bsz, num_workers=n_workers, pin_memory=True, shuffle=True,
-    )
     optimizer = torch.optim.AdamW(model.parameters(), fused=True)
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda t: 1.0)
 
-    # Configure profiling
-    if profile:
-        def trace_export_callback(prof):
-            prof.export_chrome_trace(f'{output_dir}/{Path(cfg_path).stem}_trace.json')
-
-        prof_ctx = torch.profiler.profile(
-            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
-            schedule=torch.profiler.schedule(wait=5, warmup=5, active=5, repeat=1),
-            with_flops=True,
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir)
-        )
-    else:
-        prof_ctx = nullcontext()
     flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
     flops_per_iter = flops_per_token * (bsz * cfg_m.max_seq_len)
-    if 'H100' in torch.cuda.get_device_name():
-        flops_promised = 989.5e12
-    elif 'MI300X' in torch.cuda.get_device_name():
-        flops_promised = 1300e12
-    else:
-        raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
 
-    # Training loop
-    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    flops_promised = 1300e12
+
     model.train()
     
     import transformer_engine.pytorch as te
@@ -91,18 +108,17 @@ def train(
             with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                 yield
 
-    with prof_ctx as prof, tqdm(total=n_steps) as pbar, ctx():
-        for step_idx, data_batch in enumerate(data_loader):
+    with ctx():
+         for step_idx in range(100):
+            input_BT = torch.randint(50304, [8, 1024], dtype=torch.int64).to('cuda:0')
+            label_BT = torch.randint(50304, [8, 1024], dtype=torch.int64).to('cuda:0')
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
             start.record()
 
-            input_BT, label_BT = map(lambda t: t.pin_memory().to(gpu_id), data_batch)
-
-            with torch.amp.autocast('cuda', torch.bfloat16):
-                logits_BTV = model(input_BT)
-                loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
-                loss /= grad_acc_steps
+            logits_BTV = model(input_BT)
+            loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
+            loss /= grad_acc_steps
             loss.backward()
 
             if (step_idx + 1) % grad_acc_steps == 0:  # Assume n_steps % grad_acc_steps == 0
@@ -118,29 +134,7 @@ def train(
             flops_per_sec = flops_per_iter / t
             mfu = flops_per_sec / flops_promised
 
-            pbar.set_description(f'{(flops_per_sec/1e12):.2f} TFLOP/s  MFU={mfu:.2%}')
-            pbar.update()
-            
-            if profile:
-                prof.step()
-
-
-
-class DummyDataset(Dataset):
-    def __init__(self, vocab_size, max_seq_len, ds_len):
-        super().__init__()
-        self.vocab_size = vocab_size
-        self.max_seq_len = max_seq_len
-        self.ds_len = ds_len
-
-    def __getitem__(self, idx):
-        input_T = torch.randint(self.vocab_size, [self.max_seq_len], dtype=torch.int64)
-        label_T = torch.cat([input_T[:-1], torch.randint(self.vocab_size, [1])])
-        return input_T, label_T
-
-    def __len__(self):
-        return self.ds_len
- 
+            print(f'{(flops_per_sec/1e12):.2f} TFLOP/s  MFU={mfu:.2%}')
 
 if __name__ == '__main__':
     import fire
