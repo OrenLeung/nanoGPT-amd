@@ -74,7 +74,7 @@ def train(
 		if 'H100' in torch.cuda.get_device_name():
 			flops_promised = 1979e12
 		elif 'MI300X' in torch.cuda.get_device_name():
-			flops_promised = 1300e12
+            flops_promised = 5220e12
 		else:
 			raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
 
