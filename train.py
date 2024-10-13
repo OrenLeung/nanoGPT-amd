@@ -1,3 +1,4 @@
+import contextlib
 import json
 from contextlib import nullcontext
 from dataclasses import asdict
@@ -61,24 +62,36 @@ def train(
             activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
             schedule=torch.profiler.schedule(wait=5, warmup=5, active=5, repeat=1),
             with_flops=True,
-            on_trace_ready=trace_export_callback
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(output_dir)
         )
     else:
         prof_ctx = nullcontext()
-        flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
-        flops_per_iter = flops_per_token * (bsz * cfg_m.max_seq_len)
-        if 'H100' in torch.cuda.get_device_name():
-            flops_promised = 989.5e12
-        elif 'MI300X' in torch.cuda.get_device_name():
-            flops_promised = 1300e12
-        else:
-            raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
+    flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
+    flops_per_iter = flops_per_token * (bsz * cfg_m.max_seq_len)
+    if 'H100' in torch.cuda.get_device_name():
+        flops_promised = 989.5e12
+    elif 'MI300X' in torch.cuda.get_device_name():
+        flops_promised = 1300e12
+    else:
+        raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
 
     # Training loop
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     model.train()
+    
+    import transformer_engine.pytorch as te
+    from transformer_engine.common.recipe import Format, DelayedScaling
+    fp8_format = Format.HYBRID
+    # Reasonable default setting
+    fp8_recipe = DelayedScaling(fp8_format=fp8_format, amax_history_len=16, amax_compute_algo="max")
+    # Note: wrapped ctx in a function because the te.fp8_autocast object cannot be reused as a context for some reason.
+    @contextlib.contextmanager
+    def ctx():
+        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
+                yield
 
-    with prof_ctx as prof, tqdm(total=n_steps) as pbar:
+    with prof_ctx as prof, tqdm(total=n_steps) as pbar, ctx():
         for step_idx, data_batch in enumerate(data_loader):
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)

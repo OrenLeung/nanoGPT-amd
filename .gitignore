@@ -14,3 +14,5 @@ venv/
 gpucore.*
 profile_traces/*
 TransformerEngine/*
+trace_processor
+outputs/*

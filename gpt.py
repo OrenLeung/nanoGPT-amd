@@ -37,6 +37,9 @@ class GPTConfig:
     def estimate_flops_per_token(model, config):
         # get param count
         N = sum(p.numel() for p in model.parameters())
+        
+        # print param count in B
+        print(f"Param count: {N/1e9}B")
                  
         head_dim = config['d_embd'] // config['n_heads'] 
          
@@ -99,7 +102,22 @@ class GPT(nn.Module):
         super().__init__()
         self.tok_embd = nn.Embedding(vocab_size, d_embd)
         self.pos_embd = nn.Embedding(max_seq_len, d_embd)
-        self.tsfmr_blks = nn.ModuleList(GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
+        
+        
+        # self.tsfmr_blks = nn.ModuleList(GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
+        import transformer_engine.pytorch as te
+        self.tsfmr_blks = nn.ModuleList(te.TransformerLayer(
+                    d_embd,
+                    d_embd * 4,
+                    kwargs['n_heads'],
+                    layer_number=i+1,
+                    # Optional, for speedups
+                    fuse_qkv_params=True,
+                    attn_input_format='bshd'
+                ) 
+                for i in range(n_layers)                       
+                )
+        
         self.out_norm = nn.LayerNorm(d_embd)
 
     def forward(self, idx_BT):
