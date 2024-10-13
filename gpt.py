@@ -1,8 +1,9 @@
 from dataclasses import asdict
 
 import torch
-import torch.nn.functional as F
 import torch.nn as nn
+import torch.nn.functional as F
+import transformer_engine.pytorch as te
 from pydantic.dataclasses import dataclass
 
 
@@ -122,6 +123,46 @@ class GPT(nn.Module):
             tsfmr_blk.load_ref_weights(ref_blk)
 
         self.out_norm.load_state_dict(ref.transformer.ln_f.state_dict())
+
+
+class Fp8GPTBlock(te.TransformerLayer):
+    def __init__(self, d_embd, n_heads, **kwargs):
+        super().__init__(
+			d_embd,
+			4*d_embd,
+			n_heads,
+			hidden_dropout=0.0,
+			attention_dropout=0.0,
+			layer_type='encoder',
+			self_attn_mask_type='causal',
+			normalization='LayerNorm',
+			bias=True,
+			activation='gelu',
+			attn_input_format='bshd',
+			fuse_qkv_params=True
+		)
+
+
+class Fp8GPT(nn.Module):
+    def __init__(self, vocab_size, max_seq_len, n_layers, d_embd, **kwargs):
+        super().__init__()
+        self.tok_embd = nn.Embedding(vocab_size, d_embd)
+        self.pos_embd = nn.Embedding(max_seq_len, d_embd)
+        self.tsfmr_blks = nn.ModuleList(Fp8GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
+        self.out_norm = te.LayerNorm(d_embd)
+
+    def forward(self, idx_BT):
+        pos_T = torch.arange(idx_BT.size(1), dtype=torch.int64, device=idx_BT.device)
+        x_BTE = self.tok_embd(idx_BT) + self.pos_embd(pos_T).unsqueeze(0)
+
+        for tsfmr_blk in self.tsfmr_blks:
+            x_BTE = tsfmr_blk(x_BTE)
+
+		# Couldn't fuse layer norm with linear due to weight tying
+        x_BTE = self.out_norm(x_BTE)
+        logits_BTV = x_BTE @ self.tok_embd.weight.T
+
+        return logits_BTV
 
 
 if __name__ == '__main__':

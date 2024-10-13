@@ -2,10 +2,12 @@ from dataclasses import asdict
 from typing import Optional
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
+import transformer_engine.pytorch as te
 
 from pydantic.dataclasses import dataclass
-from torch import nn
+
 
 def disable_torch_compile_if_amd(func):
     # Define a wrapper that applies the torch.compiler.disable decorator conditionally
@@ -201,6 +203,76 @@ def precompute_freq_cis(dim, rope_base, max_seq_len, **kwargs):
     freq_cis_TF = torch.polar(torch.ones_like(freq_TF), freq_TF)
     freq_cis_TFC = torch.stack([freq_cis_TF.real, freq_cis_TF.imag], dim=-1)
     return freq_cis_TFC
+
+
+class Fp8LLaMA(nn.Module):
+    def __init__(self, vocab_size, d_embd, n_layers, n_heads, **kwargs):
+        super().__init__()
+        self.tok_embd = nn.Embedding(vocab_size, d_embd)
+        self.tsfmr_blks = nn.ModuleList(Fp8LLaMABlock(d_embd, n_heads=n_heads, **kwargs) for _ in range(n_layers))
+        self.norm_lm_head = te.LayerNormLinear(
+            d_embd, vocab_size, bias=False,
+            normalization='RMSNorm', eps=kwargs['norm_eps']
+        )
+        self.register_buffer('freq_cis_TFC', precompute_freq_cis(d_embd//n_heads, **kwargs).to(self.tok_embd.weight.dtype))
+
+    def forward(self, idx_BT):
+        x_BTE = self.tok_embd(idx_BT)
+        for tsfmr_blk in self.tsfmr_blks:
+            x_BTE = tsfmr_blk(x_BTE, self.freq_cis_TFC)
+        logits_BTV = self.norm_lm_head(x_BTE)
+        return logits_BTV
+
+
+class Fp8LLaMABlock(nn.Module):
+    def __init__(self, d_embd, d_hid, norm_eps, **kwargs):
+        super().__init__()
+        self.attn_norm = te.RMSNorm(d_embd, eps=norm_eps)
+        self.attn = Fp8GroupedQueryAttention(d_embd, **kwargs)
+        self.norm_ffn = te.LayerNormMLP(
+            d_embd, d_hid, bias=False,
+            normalization='RMSNorm', eps=norm_eps,
+            activation='swiglu'
+        )
+
+    def forward(self, x_BTE, freq_cis_TFC):
+        h_BTE = x_BTE + self.attn(self.attn_norm(x_BTE), freq_cis_TFC)
+        out_BTE = h_BTE + self.norm_ffn(h_BTE)
+        return out_BTE
+
+
+class Fp8GroupedQueryAttention(nn.Module):
+    def __init__(self, d_embd, n_heads, n_kv_heads, **kwargs):
+        super().__init__()
+        self.d_head = d_embd // n_heads  # D
+        self.d_embd = d_embd
+        self.d_kv_embd = n_kv_heads * self.d_head
+
+        self.attn_proj = te.Linear(d_embd, d_embd+2*self.d_kv_embd, bias=False)
+        self.sdpa = disable_torch_compile_if_amd(te.DotProductAttention(
+            n_heads,
+            self.d_head,
+            num_gqa_groups=n_kv_heads,
+            attention_dropout=0.0,
+            attn_mask_type='causal',
+            attention_type='self',
+            qkv_format='bshd'
+        ))
+        self.out_proj = te.Linear(d_embd, d_embd, bias=False)
+
+    def forward(self, x_BTE, freq_cis_TF):
+        qkv = self.attn_proj(x_BTE).split([self.d_embd, self.d_kv_embd, self.d_kv_embd], -1)
+        split_attn_head = lambda z: z.unflatten(-1, [-1, self.d_head])
+        q_BTHD, k_BTJD, v_BTJD = map(split_attn_head, qkv)
+
+        # Needs a new rope that applies at a different dim
+        q_BTHD = apply_rotary_embd(q_BTHD.transpose(1, 2), freq_cis_TF).transpose(1, 2)
+        k_BTJD = apply_rotary_embd(k_BTJD.transpose(1, 2), freq_cis_TF).transpose(1, 2)
+
+        o_BTE = self.sdpa(q_BTHD, k_BTJD, v_BTJD)
+        y_BTE = self.out_proj(o_BTE)
+
+        return y_BTE
 
 
 if __name__ == '__main__':
