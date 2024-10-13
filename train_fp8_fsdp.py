@@ -64,7 +64,10 @@ def train_fsdp(
         cfg_path, bsz, n_workers, n_steps, grad_acc_steps, reduce_freq,
         sac_freq, pt_compile, compile_mode, profile, output_dir
     )
-    mp.spawn(train, train_args, nprocs=world_size)
+    try:
+        mp.spawn(train, train_args, nprocs=world_size)
+    except:
+        destroy_process_group()
 
 
 def train(
@@ -89,10 +92,9 @@ def train(
         raise ValueError(f'Model architecture {cfg_json["arch_name"]} not supported.')
     cfg_m = cfg_cls(**cfg_json)
     model = model_cls(**cfg_json)
-    dprint(f'Created model {model_cls}')
 
+    # Need to do before wrapping in FSDP
     if rank == 0:
-        # Need to do before wrapping in FSDP
         flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
 
     # Configure FSDP
@@ -102,14 +104,16 @@ def train(
         buffer_dtype=torch.bfloat16
     )
     wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls={blk_cls})
+    all_gpus = dist.new_group(backend='nccl')
     model = FSDP(
         model,
         device_id=rank,
+        process_group=all_gpus,
         mixed_precision=mp_policy,
         auto_wrap_policy=wrap_policy,
         use_orig_params=True
     )
-    dprint('Configured FSDP')
+    dprint(f'Created FSDP model {model_cls}')
 
     # Selective activation checkpointing
     # Reference: https://github.com/OrenLeung/fsdp/blob/main/fms_fsdp/policies/ac_handler.py
@@ -156,6 +160,10 @@ def train(
     else:
         prof_ctx = nullcontext()
 
+    # Configure FP8
+    fp8_format = Format.HYBRID  # E4M3 during forward pass, E5M2 during backward pass
+    fp8_recipe = DelayedScaling(fp8_format=fp8_format, amax_history_len=16, amax_compute_algo='max')
+
     # Configure training setup
     dataset = DummyDataset(cfg_m.vocab_size, cfg_m.max_seq_len, bsz*n_steps)
     data_loader = DataLoader(
@@ -181,21 +189,22 @@ def train(
             input_BT, label_BT = map(lambda t: t.pin_memory().to(rank, non_blocking=True), data_batch)
 
             with torch.amp.autocast('cuda', torch.bfloat16):
-                logits_BTV = model(input_BT)
-                loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
-                loss /= grad_acc_steps
+                with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe, fp8_group=all_gpus):
+                    logits_BTV = model(input_BT, is_first_microbatch=(step_idx % grad_acc_steps == 0))
+                    loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
+                    loss /= grad_acc_steps
             loss.backward()
 
             ddp_loss[0] += loss.item()
             ddp_loss[1] += input_BT.size(0)
 
-            if (step_idx + 1) % grad_acc_steps == 0:  # Assume n_steps % grad_acc_steps == 0
+            if (step_idx + 1) % grad_acc_steps == 0:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
                 optimizer.step()
                 scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
 
-            if (step_idx + 1) % reduce_freq == 0:  # Assume n_steps % reduce_freq == 0
+            if (step_idx + 1) % reduce_freq == 0:
                 dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
 
             if rank == 0:
