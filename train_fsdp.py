@@ -88,7 +88,8 @@ def train(
     
     model = model_cls(**cfg_json)
     # need to do before wrapping in FSDP
-    flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
+    if rank == 0:
+        flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
     model = FSDP(
         model,
         device_id=rank,
