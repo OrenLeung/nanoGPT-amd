@@ -214,65 +214,38 @@ class Fp8LLaMA(nn.Module):
             d_embd, vocab_size, bias=False,
             normalization='RMSNorm', eps=kwargs['norm_eps']
         )
-        self.register_buffer('freq_cis_TFC', precompute_freq_cis(d_embd//n_heads, **kwargs).to(self.tok_embd.weight.dtype))
 
-    def forward(self, idx_BT):
+        # max_seq_len = max_positional_embedding
+        # Reference: https://huggingface.co/meta-llama/Llama-3.1-8B/blob/main/config.json
+        self.register_buffer('freq_cis_TFC', te.attention.RotaryPositionEmbedding(d_embd//n_heads)(max_seq_len=131072))
+
+    def forward(self, idx_BT, is_first_microbatch=False):
         x_BTE = self.tok_embd(idx_BT)
         for tsfmr_blk in self.tsfmr_blks:
-            x_BTE = tsfmr_blk(x_BTE, self.freq_cis_TFC)
+            x_BTE = tsfmr_blk(x_BTE, rotary_pos_emb=self.freq_cis_TFC, is_first_microbatch=is_first_microbatch)
         logits_BTV = self.norm_lm_head(x_BTE)
         return logits_BTV
 
 
-class Fp8LLaMABlock(nn.Module):
-    def __init__(self, d_embd, d_hid, norm_eps, **kwargs):
-        super().__init__()
-        self.attn_norm = te.RMSNorm(d_embd, eps=norm_eps)
-        self.attn = Fp8GroupedQueryAttention(d_embd, **kwargs)
-        self.norm_ffn = te.LayerNormMLP(
-            d_embd, d_hid, bias=False,
-            normalization='RMSNorm', eps=norm_eps,
-            activation='swiglu'
-        )
-
-    def forward(self, x_BTE, freq_cis_TFC):
-        h_BTE = x_BTE + self.attn(self.attn_norm(x_BTE), freq_cis_TFC)
-        out_BTE = h_BTE + self.norm_ffn(h_BTE)
-        return out_BTE
-
-
-class Fp8GroupedQueryAttention(nn.Module):
-    def __init__(self, d_embd, n_heads, n_kv_heads, **kwargs):
-        super().__init__()
-        self.d_head = d_embd // n_heads  # D
-        self.d_embd = d_embd
-        self.d_kv_embd = n_kv_heads * self.d_head
-
-        self.attn_proj = te.Linear(d_embd, d_embd+2*self.d_kv_embd, bias=False)
-        self.sdpa = disable_torch_compile_if_amd(te.DotProductAttention(
-            n_heads,
-            self.d_head,
-            num_gqa_groups=n_kv_heads,
+class Fp8LLaMABlock(te.TransformerLayer):
+    ''' Reference Implementation:
+    https://github.com/NVIDIA/TransformerEngine/blob/55dcbb4b02f560d52dc1215a9de348b37487ee3d/docs/examples/te_llama/te_llama.py#L42
+    '''
+    def __init__(self, d_embd, d_hid, n_heads, n_kv_heads, norm_eps, **kwargs):
+        super().__init__(
+            hidden_size=d_embd,
+            num_attention_heads=n_heads,
+            num_gqa_groups=n_heads//n_kv_heads,
+            fuse_qkv_params=True,
+            attn_input_format='bshd',
             attention_dropout=0.0,
-            attn_mask_type='causal',
-            attention_type='self',
-            qkv_format='bshd'
-        ))
-        self.out_proj = te.Linear(d_embd, d_embd, bias=False)
-
-    def forward(self, x_BTE, freq_cis_TF):
-        qkv = self.attn_proj(x_BTE).split([self.d_embd, self.d_kv_embd, self.d_kv_embd], -1)
-        split_attn_head = lambda z: z.unflatten(-1, [-1, self.d_head])
-        q_BTHD, k_BTJD, v_BTJD = map(split_attn_head, qkv)
-
-        # Needs a new rope that applies at a different dim
-        q_BTHD = apply_rotary_embd(q_BTHD.transpose(1, 2), freq_cis_TF).transpose(1, 2)
-        k_BTJD = apply_rotary_embd(k_BTJD.transpose(1, 2), freq_cis_TF).transpose(1, 2)
-
-        o_BTE = self.sdpa(q_BTHD, k_BTJD, v_BTJD)
-        y_BTE = self.out_proj(o_BTE)
-
-        return y_BTE
+            normalization='RMSNorm',
+            layernorm_epsilon=norm_eps,
+            ffn_hidden_size=d_hid,
+            bias=False,
+            activation='swiglu',
+            hidden_dropout=0.0
+        )
 
 
 if __name__ == '__main__':
