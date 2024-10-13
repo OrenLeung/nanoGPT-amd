@@ -97,7 +97,7 @@ def train(
 
 			with torch.amp.autocast('cuda', torch.bfloat16):
 				with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
-					logits_BTV = model(input_BT)
+					logits_BTV = model(input_BT, is_first_microbatch=(step_idx % grad_acc_steps == 0))
 					loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
 					loss /= grad_acc_steps
 			loss.backward()
