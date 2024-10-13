@@ -41,7 +41,7 @@ def train_fsdp(
     n_steps: int = 128*8,
     grad_acc_steps: int = 8,
     reduce_freq: int = 32,
-    sac_freq: str = '1/1',
+    sac_freq: str = None, # "1/2", "1/1", etc. 
     pt_compile: bool = False,
     compile_mode: str = 'default', # "default", "reduce-overhead", "max-autotune" or "max-autotune-no-cudagraphs"
     profile: bool = False,
@@ -99,16 +99,16 @@ def train(
 
     # Selective activation checkpointing
     # Reference: https://github.com/OrenLeung/fsdp/blob/main/fms_fsdp/policies/ac_handler.py
-    block_idx = 0
-    q, p = map(int, sac_freq.split('/'))  # Applies AC for q out of every p blocks
-    def should_ckpt(submodule):
-        nonlocal block_idx
-        if isinstance(submodule, blk_cls):
-            ckpt = (block_idx % p < q)
-            block_idx += 1
-            return ckpt
-        return False
-    if sac_freq != '1/1':
+    if sac_freq == None:
+        block_idx = 0
+        q, p = map(int, sac_freq.split('/'))  # Applies AC for q out of every p blocks
+        def should_ckpt(submodule):
+            nonlocal block_idx
+            if isinstance(submodule, blk_cls):
+                ckpt = (block_idx % p < q)
+                block_idx += 1
+                return ckpt
+            return False
         non_reentrant_wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
         apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=should_ckpt)
 
