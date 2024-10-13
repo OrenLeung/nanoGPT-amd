@@ -6,7 +6,15 @@ import torch.nn as nn
 from pydantic.dataclasses import dataclass
 
 
-@torch.compiler.disable()
+def disable_torch_compile_if_amd(func):
+    # Define a wrapper that applies the torch.compiler.disable decorator conditionally
+    if torch.cuda.is_available() and "MI300X" in torch.cuda.get_device_name():
+        return torch.compiler.disable()(func)
+    else:
+        return func
+
+
+@disable_torch_compile_if_amd
 def scaled_dot_product_attention_wrapper(q_BHTD, k_BHTD, v_BHTD, dropout_p=0.0, is_causal=True):
     # with torch.nn.attention.sdpa_kernel(
     #     enable_math=True,
