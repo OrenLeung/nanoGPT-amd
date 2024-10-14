@@ -44,7 +44,7 @@ from transformer_engine.common.recipe import Format, DelayedScaling
 from transformer_engine.pytorch.distributed import prepare_te_modules_for_fsdp
 
 
-def train_fsdp(
+def train_fp8_fsdp(
     cfg_path: str,
     bsz: int = 8,
     n_workers: int = 8,
@@ -53,10 +53,23 @@ def train_fsdp(
     reduce_freq: int = 32,
     sac_freq: str = '1/1',
     pt_compile: bool = False,
-    compile_mode: str = 'default', # "default", "reduce-overhead", "max-autotune" or "max-autotune-no-cudagraphs"
+    compile_mode: str = 'default',
     profile: bool = False,
     output_dir: str = 'outputs/fsdp/'
 ):
+    '''
+    :param       cfg_path: Model configuration file path
+    :param            bsz: Batch size
+    :param      n_workers: Number of CPUs for data loading
+    :param        n_steps: Number of training steps
+    :param grad_acc_steps: Number of gradient accumulation steps
+    :param    reduce_freq: Number of steps FSDP performs an all gather
+    :param       sac_freq: Selective activation checkpointing (AC). If sac_freq="q/p", applies AC for q out of every p blocks
+    :param     pt_compile: Enable PyTorch compile
+    :param   compile_mode: Set PyTorch compile mode. Options: "default", "reduce-overhead", "max-autotune", "max-autotune-no-cudagraphs"
+    :param        profile: Enable profiling
+    :param     output_dir: Profiling output saving directory
+    '''
     torch.manual_seed(3985)
     world_size = torch.cuda.device_count()
     train_args = (
@@ -98,13 +111,13 @@ def train(
         flops_per_token = cfg_m.estimate_flops_per_token(model, cfg_json)
 
     # Configure FSDP
+    all_gpus = dist.new_group(backend='nccl')
     mp_policy = MixedPrecision(
         param_dtype=torch.bfloat16,
         reduce_dtype=torch.bfloat16,
         buffer_dtype=torch.bfloat16
     )
     wrap_policy = partial(transformer_auto_wrap_policy, transformer_layer_cls={blk_cls})
-    all_gpus = dist.new_group(backend='nccl')
     model = FSDP(
         model,
         device_id=rank,
@@ -118,7 +131,7 @@ def train(
     # Selective activation checkpointing
     # Reference: https://github.com/OrenLeung/fsdp/blob/main/fms_fsdp/policies/ac_handler.py
     block_idx = 0
-    q, p = map(int, sac_freq.split('/'))  # Applies AC for q out of every p blocks
+    q, p = map(int, sac_freq.split('/'))
     def should_ckpt(submodule):
         nonlocal block_idx
         if isinstance(submodule, blk_cls):
@@ -190,7 +203,7 @@ def train(
 
             with torch.amp.autocast('cuda', torch.bfloat16):
                 with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe, fp8_group=all_gpus):
-                    logits_BTV = model(input_BT, is_first_microbatch=(step_idx % grad_acc_steps == 0))
+                    logits_BTV = model(input_BT, is_first_microbatch=False)
                     loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
                     loss /= grad_acc_steps
             loss.backward()
@@ -247,4 +260,4 @@ def distrib_print(rank, *args, **kwargs):
 
 if __name__ == '__main__':
     import fire
-    fire.Fire(train_fsdp)
+    fire.Fire(train_fp8_fsdp)
