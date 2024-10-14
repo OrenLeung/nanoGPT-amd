@@ -25,7 +25,7 @@ class DummyDataset(Dataset):
         return self.ds_len
 
 
-def get_model_config(cfg_path, fp8=False):
+def get_model_config(cfg_path, fp8):
     with open(cfg_path) as f:
         cfg_json = json.load(f)
 
@@ -49,7 +49,7 @@ def get_model_config(cfg_path, fp8=False):
     return cfg_m, model_cls, blk_cls
 
 
-def configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank=0, fp8=False):
+def configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, fp8, rank=0):
     if rank != 0:
         for step_idx, data_batch in enumerate(data_loader):
             yield step_idx, data_batch
