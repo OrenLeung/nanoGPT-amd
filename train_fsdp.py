@@ -138,9 +138,10 @@ def train_fsdp(
     if sac_freq != '1/1':
         non_reentrant_wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
         apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=should_ckpt)
+        dprint(rank, f'Configured selective activation checkpointing {sac_freq}')
     elif use_fp8:
         prepare_te_modules_for_fsdp(model)
-    dprint(rank, 'Configured selective activation checkpointing')
+        dprint(rank, 'Sharded TE modules for FSDP')
 
     # PyTorch compile
     if pt_compile:
@@ -152,7 +153,7 @@ def train_fsdp(
     fp8_recipe = DelayedScaling(fp8_format=fp8_format, amax_history_len=16, amax_compute_algo='max')
 
     # Training loop
-    loop_iter = configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank)
+    loop_iter = configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, use_fp8, rank)
     ddp_loss = torch.zeros(2, device=rank)
     model.train()
 
