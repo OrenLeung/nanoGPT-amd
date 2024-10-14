@@ -120,7 +120,7 @@ def train_fsdp_fp8(
     fp8_recipe = DelayedScaling(fp8_format=fp8_format, amax_history_len=16, amax_compute_algo='max')
 
     # Training loop
-    loop_iter = configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank)
+    loop_iter = configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank, fp8=True)
     ddp_loss = torch.zeros(2, device=rank)
     model.train()
 
