@@ -49,7 +49,7 @@ def get_model_config(cfg_path, fp8=False):
     return cfg_m, model_cls, blk_cls
 
 
-def configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank=0):
+def configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank=0, fp8=False):
     if rank != 0:
         for step_idx, data_batch in enumerate(data_loader):
             yield step_idx, data_batch
@@ -58,9 +58,9 @@ def configure_train_loop(data_loader, profile, output_path, cfg_m, bsz, rank=0):
     flops_per_iter = cfg_m.flops_per_token * (bsz * cfg_m.max_seq_len)
 
     if 'H100' in torch.cuda.get_device_name():
-        flops_promised = 989.5e12
+        flops_promised = 1979e12 if fp8 else 989.5e12
     elif 'MI300X' in torch.cuda.get_device_name():
-        flops_promised = 1300e12
+        flops_promised = 2610e12 if fp8 else 1300e12
     else:
         raise ValueError(f'FLOP/s for device {torch.cuda.get_device_name()} is unknown')
 
