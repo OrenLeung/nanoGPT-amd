@@ -29,7 +29,7 @@ To start the container:
 ### AMD
 To build the image:
 ```bash
-docker build -t llm-train-bench -f ./docker/Dockerfile.amd .
+docker build -t llm-train-bench/amd -f ./docker/Dockerfile.amd .
 ```
 
 To start the container:
