@@ -138,7 +138,7 @@ def train_fsdp(
     if sac_freq != '1/1':
         non_reentrant_wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
         apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=should_ckpt)
-    else:
+    elif use_fp8:
         prepare_te_modules_for_fsdp(model)
     dprint(rank, 'Configured selective activation checkpointing')
 
