@@ -209,20 +209,22 @@ class Fp8LLaMA(nn.Module):
     def __init__(self, vocab_size, d_embd, n_layers, n_heads, **kwargs):
         super().__init__()
         self.tok_embd = nn.Embedding(vocab_size, d_embd)
-        self.tsfmr_blks = nn.ModuleList(Fp8LLaMABlock(d_embd, n_heads=n_heads, **kwargs) for _ in range(n_layers))
+        self.tsfmr_blks = nn.ModuleList(
+            Fp8LLaMABlock(d_embd, n_heads=n_heads, **kwargs) for _ in range(n_layers)
+        )
         self.norm_lm_head = te.LayerNormLinear(
             d_embd, vocab_size, bias=False,
             normalization='RMSNorm', eps=kwargs['norm_eps']
         )
 
-        # max_seq_len = max_positional_embedding
         # Reference: https://huggingface.co/meta-llama/Llama-3.1-8B/blob/main/config.json
-        self.register_buffer('freq_cis_TFC', te.attention.RotaryPositionEmbedding(d_embd//n_heads)(max_seq_len=131072))
+        freq_cis_TE = te.attention.RotaryPositionEmbedding(d_embd//n_heads)(max_seq_len=131072)
+        self.register_buffer('freq_cis_TE', freq_cis_TE.to(torch.bfloat16))
 
     def forward(self, idx_BT, is_first_microbatch=False):
         x_BTE = self.tok_embd(idx_BT)
         for tsfmr_blk in self.tsfmr_blks:
-            x_BTE = tsfmr_blk(x_BTE, rotary_pos_emb=self.freq_cis_TFC, is_first_microbatch=is_first_microbatch)
+            x_BTE = tsfmr_blk(x_BTE, rotary_pos_emb=self.freq_cis_TE, is_first_microbatch=is_first_microbatch)
         logits_BTV = self.norm_lm_head(x_BTE)
         return logits_BTV
 
