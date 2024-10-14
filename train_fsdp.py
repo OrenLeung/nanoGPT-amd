@@ -126,6 +126,12 @@ def train_fsdp(
         ddp_loss[0] += loss.item()
         ddp_loss[1] += input_BT.size(0)
 
+        if (step_idx + 1) % grad_acc_steps == 0:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+
         if (step_idx + 1) % reduce_freq == 0:
             dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
 
