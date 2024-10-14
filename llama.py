@@ -43,21 +43,14 @@ class LLaMAConfig:
     d_hid: int = Optional[int] # K
     arch_name: str = 'llama'
 
-    @staticmethod
-    def estimate_flops_per_token(model, config):
-        # get param count
-        N = sum(p.numel() for p in model.parameters())
-        
-        # print number of billion parameters
-        print(f"Number of parameters: {N/1e9:.2f}B")
-                 
-        head_dim = config['d_embd'] // config['n_heads'] 
-         
-        flops_per_token = 6 * N + 12 * config['n_layers'] * config['n_heads'] * head_dim * config['max_seq_len']
-        
-        return flops_per_token
-         
+    def estimate_flops_per_token(self, model, bsz, rank=0):
+        head_dim = self.d_embd // self.n_heads
+        N = sum(p.numel() for p in model.parameters())  # get param count
 
+        if rank == 0:
+            print(f"Number of parameters: {N/1e9:.2f}B")    # print number of billion parameters 
+
+        self.flops_per_token = 6 * N + 12 * self.n_layers * self.n_heads * head_dim * self.max_seq_len
 
     def __post_init__(self):
         assert self.d_embd % self.n_heads == 0, 'd_embd must be a multiple of n_heads.'
@@ -178,7 +171,7 @@ class LLaMA(nn.Module):
         self.lm_head = nn.Linear(d_embd, vocab_size, bias=False)
         self.register_buffer('freq_cis_TFC', precompute_freq_cis(d_embd//n_heads, **kwargs).to(self.lm_head.weight.dtype))
 
-    def forward(self, idx_BT):
+    def forward(self, idx_BT, **kwargs):
         x_BTE = self.tok_embd(idx_BT)
         for tsfmr_blk in self.tsfmr_blks:
             x_BTE = tsfmr_blk(x_BTE, self.freq_cis_TFC)
@@ -221,7 +214,7 @@ class Fp8LLaMA(nn.Module):
         freq_cis_TE = te.attention.RotaryPositionEmbedding(d_embd//n_heads)(max_seq_len=131072)
         self.register_buffer('freq_cis_TE', freq_cis_TE.to(torch.bfloat16))
 
-    def forward(self, idx_BT, is_first_microbatch=False):
+    def forward(self, idx_BT, is_first_microbatch):
         x_BTE = self.tok_embd(idx_BT)
         for tsfmr_blk in self.tsfmr_blks:
             x_BTE = tsfmr_blk(x_BTE, rotary_pos_emb=self.freq_cis_TE, is_first_microbatch=is_first_microbatch)
