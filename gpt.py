@@ -149,12 +149,12 @@ class Fp8GPT(nn.Module):
         self.tsfmr_blks = nn.ModuleList(Fp8GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
         self.out_norm = te.LayerNorm(d_embd)
 
-    def forward(self, idx_BT):
+    def forward(self, idx_BT, is_first_microbatch):
         pos_T = torch.arange(idx_BT.size(1), dtype=torch.int64, device=idx_BT.device)
         x_BTE = self.tok_embd(idx_BT) + self.pos_embd(pos_T).unsqueeze(0)
 
         for tsfmr_blk in self.tsfmr_blks:
-            x_BTE = tsfmr_blk(x_BTE)
+            x_BTE = tsfmr_blk(x_BTE, is_first_microbatch=is_first_microbatch)
 
 		# Couldn't fuse layer norm with linear due to weight tying
         x_BTE = self.out_norm(x_BTE)
