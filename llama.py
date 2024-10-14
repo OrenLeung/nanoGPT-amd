@@ -171,7 +171,7 @@ class LLaMA(nn.Module):
         self.lm_head = nn.Linear(d_embd, vocab_size, bias=False)
         self.register_buffer('freq_cis_TFC', precompute_freq_cis(d_embd//n_heads, **kwargs).to(self.lm_head.weight.dtype))
 
-    def forward(self, idx_BT):
+    def forward(self, idx_BT, **kwargs):
         x_BTE = self.tok_embd(idx_BT)
         for tsfmr_blk in self.tsfmr_blks:
             x_BTE = tsfmr_blk(x_BTE, self.freq_cis_TFC)
@@ -214,7 +214,7 @@ class Fp8LLaMA(nn.Module):
         freq_cis_TE = te.attention.RotaryPositionEmbedding(d_embd//n_heads)(max_seq_len=131072)
         self.register_buffer('freq_cis_TE', freq_cis_TE.to(torch.bfloat16))
 
-    def forward(self, idx_BT, is_first_microbatch=False):
+    def forward(self, idx_BT, is_first_microbatch):
         x_BTE = self.tok_embd(idx_BT)
         for tsfmr_blk in self.tsfmr_blks:
             x_BTE = tsfmr_blk(x_BTE, rotary_pos_emb=self.freq_cis_TE, is_first_microbatch=is_first_microbatch)

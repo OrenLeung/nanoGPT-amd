@@ -108,7 +108,8 @@ def train_ddp(
 
         with torch.amp.autocast('cuda', torch.bfloat16):
             with te.fp8_autocast(enabled=use_fp8, fp8_recipe=fp8_recipe, fp8_group=all_gpus):
-                logits_BTV = model(input_BT)
+                weight_cache = use_fp8 and (step_idx % grad_acc_steps == 0)
+                logits_BTV = model(input_BT, is_first_microbatch=weight_cache)
                 loss = F.cross_entropy(logits_BTV.flatten(0, 1), label_BT.flatten())
                 loss /= grad_acc_steps
         loss.backward()

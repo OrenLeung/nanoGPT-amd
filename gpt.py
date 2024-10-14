@@ -101,7 +101,7 @@ class GPT(nn.Module):
         self.tsfmr_blks = nn.ModuleList(GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
         self.out_norm = nn.LayerNorm(d_embd)
 
-    def forward(self, idx_BT):
+    def forward(self, idx_BT, **kwargs):
         pos_T = torch.arange(idx_BT.size(1), dtype=torch.int64, device=idx_BT.device)
         x_BTE = self.tok_embd(idx_BT) + self.pos_embd(pos_T).unsqueeze(0)
 
@@ -149,7 +149,7 @@ class Fp8GPT(nn.Module):
         self.tsfmr_blks = nn.ModuleList(Fp8GPTBlock(d_embd, **kwargs) for _ in range(n_layers))
         self.out_norm = te.LayerNorm(d_embd)
 
-    def forward(self, idx_BT, is_first_microbatch=False):
+    def forward(self, idx_BT, is_first_microbatch):
         pos_T = torch.arange(idx_BT.size(1), dtype=torch.int64, device=idx_BT.device)
         x_BTE = self.tok_embd(idx_BT) + self.pos_embd(pos_T).unsqueeze(0)
 
