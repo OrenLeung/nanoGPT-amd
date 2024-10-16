@@ -13,16 +13,16 @@ RUN pip3 uninstall -y torch
 RUN pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/rocm6.2
 
 
-WORKDIR /workspace/
+# WORKDIR /workspace/
 
-# Unlike Nvidia NGC Pytorch image, ROCm Pytorch does not have Transformer Engine Installed
-# So we need to install from source
-RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
-ENV NVTE_USE_HIPBLASLT=1
-ENV NVTE_FRAMEWORK=pytorch
-ENV PYTORCH_ROCM_ARCH=gfx942
+# # Unlike Nvidia NGC Pytorch image, ROCm Pytorch does not have Transformer Engine Installed
+# # So we need to install from source
+# RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
+# ENV NVTE_USE_HIPBLASLT=1
+# ENV NVTE_FRAMEWORK=pytorch
+# ENV PYTORCH_ROCM_ARCH=gfx942
 
-RUN cd TransformerEngine && pip install .
+# RUN cd TransformerEngine && pip install .
 
 WORKDIR /workspace/llm-train-bench/
 
