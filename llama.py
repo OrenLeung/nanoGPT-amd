@@ -17,7 +17,7 @@ def disable_torch_compile_if_amd(func):
         return func
 
 
-@disable_torch_compile_if_amd
+# @disable_torch_compile_if_amd
 def scaled_dot_product_attention_wrapper(q_BHTD, k_BHTD, v_BHTD, dropout_p=0.0, is_causal=True):
     # with torch.nn.attention.sdpa_kernel(
     #     enable_math=True,

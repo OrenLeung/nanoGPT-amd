@@ -1,8 +1,7 @@
 
 FROM rocm/pytorch:rocm6.2_ubuntu22.04_py3.10_pytorch_release_2.3.0
-# FROM rocm/pytorch:latest-internal
 
-RUN apt install nano
+RUN apt install -y nano
 
 RUN pip install uv
 
@@ -12,18 +11,19 @@ RUN pip3 uninstall -y torch
 
 RUN pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/rocm6.2
 
+WORKDIR /workspace/
 
-# WORKDIR /workspace/
+RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
+ENV NVTE_USE_HIPBLASLT=1
+ENV NVTE_FRAMEWORK=pytorch
+ENV NVTE_ROCM_ARCH=gfx942
 
-# # Unlike Nvidia NGC Pytorch image, ROCm Pytorch does not have Transformer Engine Installed
-# # So we need to install from source
-# RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
-# ENV NVTE_USE_HIPBLASLT=1
-# ENV NVTE_FRAMEWORK=pytorch
-# ENV PYTORCH_ROCM_ARCH=gfx942
-
-# RUN cd TransformerEngine && pip install .
+RUN cd TransformerEngine && pip install .
 
 WORKDIR /workspace/llm-train-bench/
+
+RUN pip3 uninstall -y torch
+
+RUN pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/rocm6.2
 
 CMD ["/usr/bin/bash"]

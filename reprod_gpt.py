@@ -69,7 +69,7 @@ class GPT(nn.Module):
 
 def train(
     gpu_id: int = 0,
-    bsz: int = 14,
+    bsz: int = 8,
     grad_acc_steps: int = 8,
 ):
     torch.manual_seed(3985)
@@ -104,14 +104,14 @@ def train(
     # Note: wrapped ctx in a function because the te.fp8_autocast object cannot be reused as a context for some reason.
     @contextlib.contextmanager
     def ctx():
-        with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
-            with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+        with te.fp8_autocast(enabled=True, fp8_recipe=fp8_recipe):
+            with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
                 yield
 
     with ctx():
          for step_idx in range(100):
-            input_BT = torch.randint(50304, [bsz, 1024], dtype=torch.int64).to('cuda:0')
-            label_BT = torch.randint(50304, [bsz, 1024], dtype=torch.int64).to('cuda:0')
+            input_BT = torch.randint(50304, [8, 1024], dtype=torch.int64).to('cuda:0')
+            label_BT = torch.randint(50304, [8, 1024], dtype=torch.int64).to('cuda:0')
             start = torch.cuda.Event(enable_timing=True)
             end = torch.cuda.Event(enable_timing=True)
             start.record()
