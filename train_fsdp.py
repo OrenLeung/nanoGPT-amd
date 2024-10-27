@@ -48,6 +48,7 @@ def train(
     pt_compile: bool = False,
     compile_mode: str = 'default',
     profile: bool = False,
+    rng_seed: int = 3985,
     output_dir: str = 'outputs/'
 ):
     '''
@@ -63,14 +64,14 @@ def train(
     :param        profile: Enable profiling
     :param     output_dir: Profiling output saving directory
     '''
-    torch.manual_seed(3985)
+    torch.manual_seed(rng_seed)
     world_size = torch.cuda.device_count()
     train_args = (
         world_size,
         cfg_path, bsz, n_steps, grad_acc_steps, reduce_freq,
-        sac_freq, use_fp8, pt_compile, compile_mode, profile, output_dir
+        sac_freq, use_fp8, pt_compile, compile_mode, profile, rng_seed, output_dir
     )
-    assert not (use_fp8 and (sac_freq != '1/1')), 'Selective AC currently doesn\'t work with Transformer Engine.'
+    # assert not (use_fp8 and (sac_freq != '1/1')), 'Selective AC currently doesn\'t work with Transformer Engine.'
     assert not (use_fp8 and pt_compile), 'PyTorch compile currently doesn\'t work with Transformer Engine.'
 
     try:
@@ -82,7 +83,7 @@ def train(
 def train_fsdp(
     rank, world_size,
     cfg_path, bsz, n_steps, grad_acc_steps, reduce_freq,
-    sac_freq, use_fp8, pt_compile, compile_mode, profile, output_dir
+    sac_freq, use_fp8, pt_compile, compile_mode, profile, rng_seed, output_dir
 ):
     # Construct process group
     os.environ.update({'MASTER_ADDR': 'localhost', 'MASTER_PORT': '30985'})
@@ -127,12 +128,22 @@ def train_fsdp(
         return False
 
     if sac_freq != '1/1':
-        non_reentrant_wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
-        apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=should_ckpt)
-        dprint(rank, f'Configured selective activation checkpointing {sac_freq}')
-    elif use_fp8:
-        prepare_te_modules_for_fsdp(model)
-        dprint(rank, 'Sharded TE modules for FSDP')
+        if use_fp8:
+            torch.cuda.manual_seed(rng_seed)
+            CUDA_RNG_STATES_TRACKER = te.distributed.CudaRNGStatesTracker()
+            CUDA_RNG_STATES_TRACKER.add('model-parallel-rng', rng_seed)
+
+            te_ckpt_wrapper = partial(checkpoint_wrapper,
+                checkpoint_fn=te.distributed.checkpoint,
+                use_reentrant=False,
+                get_rng_state_tracker=lambda: CUDA_RNG_STATES_TRACKER
+            )
+            apply_activation_checkpointing(model, checkpoint_wrapper_fn=te_ckpt_wrapper, check_fn=should_ckpt)
+            dprint(rank, f'Configured selective activation checkpointing {sac_freq} for TE modules')
+        else:
+            non_reentrant_wrapper = partial(checkpoint_wrapper, checkpoint_impl=CheckpointImpl.NO_REENTRANT)
+            apply_activation_checkpointing(model, checkpoint_wrapper_fn=non_reentrant_wrapper, check_fn=should_ckpt)
+            dprint(rank, f'Configured selective activation checkpointing {sac_freq}')
 
     # PyTorch compile
     if pt_compile:
