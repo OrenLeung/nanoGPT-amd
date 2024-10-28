@@ -89,6 +89,8 @@ def train(
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
 
+    torch.cuda.empty_cache()
+
 
 if __name__ == '__main__':
     import fire

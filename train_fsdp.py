@@ -193,6 +193,7 @@ def train_fsdp(
         if (step_idx + 1) % reduce_freq == 0:
             dist.all_reduce(ddp_loss, op=dist.ReduceOp.SUM)
 
+    torch.cuda.empty_cache()
     dist.barrier()
     destroy_process_group()
 

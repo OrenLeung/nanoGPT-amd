@@ -127,6 +127,7 @@ def train_ddp(
             scheduler.step()
             optimizer.zero_grad(set_to_none=True)
 
+    torch.cuda.empty_cache()
     destroy_process_group()
 
 
