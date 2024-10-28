@@ -9,7 +9,6 @@ def main(output_fname):
     with open(f'{output_fname}.csv', 'w') as f:
         f.write('Model, Strategy, GPU, dtype, TFLOP/s/GPU, MFU')
 
-
     bench_train = catch_error_and_continue(train.train, output_fname)
     bench_train_ddp = catch_error_and_continue(train_ddp.train, output_fname)
     bench_train_fsdp = catch_error_and_continue(train_fsdp.train, output_fname)
@@ -18,7 +17,7 @@ def main(output_fname):
     # GPT2 1.5B DDP bf16
     cfg = dict(
         cfg_path='configs/gpt2-1.5b.json',
-        bsz=32,
+        bsz=8,
         pt_compile=True,
         bench_fname=output_fname
     )
@@ -73,7 +72,7 @@ def main(output_fname):
     # LLaMA 3.1 8B FSDP fp8
     cfg = dict(
         cfg_path='configs/llama-3.1-8b.json',
-        bsz=2,
+        bsz=1,
         use_fp8=True,
         bench_fname=output_fname
     )
@@ -114,10 +113,10 @@ def main(output_fname):
     bench_train_fsdp(**cfg)
 
 
-    # Mistral v0.1 7B FSDP bf16
+    # Mistral v0.1 7B FSDP fp8
     cfg = dict(
         cfg_path='configs/mistral-v0.1.json',
-        bsz=2,
+        bsz=1,
         use_fp8=True,
         bench_fname=output_fname
     )
