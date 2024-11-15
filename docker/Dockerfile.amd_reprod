@@ -1,0 +1,35 @@
+FROM rocm/vllm-dev:20241022
+
+RUN apt update
+
+RUN apt install -y nano wget
+
+RUN pip install uv
+
+RUN uv pip install --system ipython pytest fire pydantic pybind11
+
+RUN pip3 uninstall -y torch
+
+RUN pip3 install --pre torch --index-url https://download.pytorch.org/whl/nightly/rocm6.2
+
+
+WORKDIR /workspace/
+
+# Unlike Nvidia NGC Pytorch image, ROCm Pytorch does not have Transformer Engine Installed
+# So we need to install from source
+RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
+ENV NVTE_USE_HIPBLASLT=1
+ENV NVTE_FRAMEWORK=pytorch
+ENV NVTE_ROCM_ARCH=gfx942
+ENV NVTE_USE_CAST_TRANSPOSE_TRITON=1
+
+RUN sed -i '47i #define LEGACY_HIPBLAS_DIRECT 1' /opt/rocm/include/hipblaslt/hipblaslt.h
+
+
+RUN cd TransformerEngine && pip install .
+
+WORKDIR /workspace/llm-train-bench/
+
+COPY . .
+
+CMD ["/usr/bin/bash"]

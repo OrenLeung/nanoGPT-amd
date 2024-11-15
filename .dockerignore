@@ -2,3 +2,4 @@
 README.md
 trace_processor
 __pycache__/**
+outputs/benchmark_results.csv
