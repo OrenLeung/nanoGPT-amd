@@ -146,7 +146,7 @@ MI300X_CONFIG = [
     "cfg_path": "configs/llama-3.1-8b.json",
     "strategy": "FSDP",
     "dtype": "BF16",
-    "device_name": "H200",
+    "device_name": "MI300X",
     "bsz": 4
     },
     {
