@@ -13,4 +13,3 @@ venv/
 *.csv
 gpucore.*
 profile_traces/*
-outputs/*
