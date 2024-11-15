@@ -50,7 +50,7 @@ H100_CONFIG = [
     "strategy": "FSDP",
     "dtype": "FP8",
     "device_name": "H100",
-    "bsz": 4
+    "bsz": 2
     },
     {
     "cfg_path": "configs/mistral-7b-v0.1.json",
